@@ -1,7 +1,7 @@
 ---
 validationTarget: '_bmad-output/planning-artifacts/prd.md'
 validationDate: '2026-02-08'
-inputDocuments: [prd.md, product-brief-wakehub2-2026-02-08.md]
+inputDocuments: [prd.md, product-brief-WakeHub-2026-02-08.md]
 validationStepsCompleted: [step-v-01-discovery, step-v-02-format-detection, step-v-03-density-validation, step-v-04-brief-coverage, step-v-05-measurability, step-v-06-traceability, step-v-07-implementation-leakage, step-v-08-domain-compliance, step-v-09-project-type, step-v-10-smart, step-v-11-holistic-quality, step-v-12-completeness, step-v-13-report-complete]
 validationStatus: COMPLETE
 holisticQualityRating: '4/5 - Good'
@@ -16,7 +16,7 @@ overallStatus: Pass
 ## Input Documents
 
 - PRD: prd.md
-- Product Brief: product-brief-wakehub2-2026-02-08.md
+- Product Brief: product-brief-WakeHub-2026-02-08.md
 
 ## Validation Findings
 
@@ -62,7 +62,7 @@ overallStatus: Pass
 
 ## Product Brief Coverage
 
-**Product Brief:** product-brief-wakehub2-2026-02-08.md
+**Product Brief:** product-brief-WakeHub-2026-02-08.md
 
 ### Coverage Map
 
@@ -414,7 +414,7 @@ Performance et Fiabilite ont des criteres specifiques. Securite, Integration et 
 
 **stepsCompleted:** Present ✓ (12 steps)
 **classification:** Present ✓ (web_app, general, medium, greenfield)
-**inputDocuments:** Present ✓ (product-brief-wakehub2-2026-02-08.md)
+**inputDocuments:** Present ✓ (product-brief-WakeHub-2026-02-08.md)
 **date:** Present ✓ (2026-02-08)
 
 **Frontmatter Completeness:** 4/4

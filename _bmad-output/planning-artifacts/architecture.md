@@ -4,12 +4,12 @@ lastStep: 8
 status: 'complete'
 completedAt: '2026-02-09'
 inputDocuments:
-  - product-brief-wakehub2-2026-02-08.md
+  - product-brief-WakeHub-2026-02-08.md
   - prd.md
   - prd-validation-report.md
   - ux-design-specification.md
 workflowType: 'architecture'
-project_name: 'wakehub2'
+project_name: 'WakeHub'
 user_name: 'Drunkrain'
 date: '2026-02-09'
 ---
@@ -109,7 +109,7 @@ mkdir -p apps/server && cd apps/server && npm init -y
 **Project Structure:**
 
 ```
-wakehub2/
+WakeHub/
 ├── apps/
 │   ├── web/          ← Vite + React + TypeScript + Mantine v7
 │   └── server/       ← Fastify + TypeScript + Drizzle ORM + better-sqlite3
@@ -444,7 +444,7 @@ data: {"cascadeId":"xyz789","serviceId":"abc123","failedStep":2,"error":{"code":
 ### Complete Project Directory Structure
 
 ```
-wakehub2/
+WakeHub/
 ├── package.json                    ← npm workspaces root
 ├── tsconfig.base.json              ← Config TS partagee
 ├── .gitignore

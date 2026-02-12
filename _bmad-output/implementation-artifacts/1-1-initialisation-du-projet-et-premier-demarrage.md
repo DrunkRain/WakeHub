@@ -161,7 +161,7 @@ So that l'application peut demarrer et servir une page minimale via Docker.
 ### Architecture du monorepo
 
 ```
-wakehub2/
+WakeHub/
 ├── package.json                    # npm workspaces root
 ├── tsconfig.base.json              # Config TS partagee (strict)
 ├── eslint.config.js                # ESLint flat config

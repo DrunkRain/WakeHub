@@ -6,7 +6,7 @@ inputDocuments:
   - epics.md
   - ux-design-specification.md
 date: '2026-02-09'
-project_name: 'wakehub2'
+project_name: 'WakeHub'
 ---
 
 # Implementation Readiness Assessment Report
