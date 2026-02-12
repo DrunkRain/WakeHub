@@ -1,10 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router';
-import { DashboardPage } from './features/dashboard/dashboard-page';
-import { ServicesPage } from './features/services/services-page';
-import { ServiceDetailPage } from './features/services/service-detail-page';
-import { DependenciesPage } from './features/dependencies/dependencies-page';
-import { SettingsPage } from './features/settings/settings-page';
-import { LogsPage } from './features/logs/logs-page';
+import { HomePage } from './features/home/home-page';
 import { FirstTimeSetup } from './features/auth/first-time-setup';
 import { LoginPage } from './features/auth/login-page';
 import { PasswordResetPage } from './features/auth/password-reset-page';
@@ -26,13 +21,8 @@ export function AppRoutes() {
           <AuthGuard>
             <AppShell>
               <Routes>
-                <Route path="/" element={<DashboardPage />} />
-                <Route path="/services" element={<ServicesPage />} />
-                <Route path="/services/:id" element={<ServiceDetailPage />} />
-                <Route path="/dependencies" element={<DependenciesPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
-                <Route path="/logs" element={<LogsPage />} />
-                {/* Fallback: redirect 404 to Dashboard */}
+                <Route path="/" element={<HomePage />} />
+                {/* Fallback: redirect 404 to Home */}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </AppShell>

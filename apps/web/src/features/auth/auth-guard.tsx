@@ -2,7 +2,6 @@ import type { ReactNode } from 'react';
 import { Navigate } from 'react-router';
 import { Loader, Center } from '@mantine/core';
 import { useCheckSetup, useAuth } from '../../api/auth.api';
-import { useSSE } from '../../hooks/use-sse';
 
 interface AuthGuardProps {
   children: ReactNode;
@@ -37,11 +36,5 @@ export function AuthGuard({ children }: AuthGuardProps) {
     return <Navigate to="/login" replace />;
   }
 
-  return <AuthenticatedShell>{children}</AuthenticatedShell>;
-}
-
-/** Inner component so useSSE is only called when authenticated. */
-function AuthenticatedShell({ children }: { children: ReactNode }) {
-  useSSE();
   return <>{children}</>;
 }

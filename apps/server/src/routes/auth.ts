@@ -8,7 +8,6 @@ import { extractSessionToken } from '../middleware/auth.middleware.js';
 declare module 'fastify' {
   interface FastifyInstance {
     db: BetterSQLite3Database<typeof import('../db/schema.js')>;
-    sseManager: import('../sse/sse-manager.js').SSEManager;
   }
   interface FastifyRequest {
     userId?: string;

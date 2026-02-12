@@ -15,48 +15,6 @@
       "when": 1770751256259,
       "tag": "0001_smart_lockjaw",
       "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1770758242651,
-      "tag": "0002_mixed_tenebrous",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1770789198634,
-      "tag": "0003_ancient_odin",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "6",
-      "when": 1770804786234,
-      "tag": "0004_confused_jazinda",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "6",
-      "when": 1770811711619,
-      "tag": "0005_vengeful_gabe_jones",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "6",
-      "when": 1770825453759,
-      "tag": "0006_famous_human_robot",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "6",
-      "when": 1770841611147,
-      "tag": "0007_unified_services",
-      "breakpoints": true
     }
   ]
 }

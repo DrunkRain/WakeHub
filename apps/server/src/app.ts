@@ -11,13 +11,7 @@ import { config } from './config.js';
 // Establish database connection
 import { db } from './db/index.js';
 import authRoutes from './routes/auth.js';
-import servicesRoutes from './routes/services.routes.js';
-import dependenciesRoutes from './routes/dependencies.routes.js';
-import cascadesRoutes from './routes/cascades.routes.js';
-import statsRoutes from './routes/stats.routes.js';
 import { authMiddleware, cleanExpiredSessions } from './middleware/auth.middleware.js';
-import { SSEManager } from './sse/sse-manager.js';
-import eventsRoutes from './routes/events.routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,13 +19,6 @@ const app = Fastify({ logger: true });
 
 // Inject db into app context
 app.decorate('db', db);
-
-// SSE Manager — singleton for real-time event broadcasting (Story 4.2)
-const sseManager = new SSEManager();
-app.decorate('sseManager', sseManager);
-app.addHook('onClose', () => {
-  sseManager.close();
-});
 
 await app.register(fastifyCookie);
 
@@ -43,21 +30,6 @@ await app.register(fastifyCors, {
 
 // Register auth routes (public - Story 1.3 & 1.4)
 await app.register(authRoutes);
-
-// Register services routes (unified machines + resources — Story 7.2)
-await app.register(servicesRoutes);
-
-// Register dependencies routes (Story 3.1)
-await app.register(dependenciesRoutes);
-
-// Register cascades routes (Story 4.1)
-await app.register(cascadesRoutes);
-
-// Register stats route (Story 4.3)
-await app.register(statsRoutes);
-
-// Register SSE events route (Story 4.2) — handles its own auth
-await app.register(eventsRoutes);
 
 // Register auth middleware on all /api routes except auth routes (Story 1.4)
 app.addHook('preHandler', async (request, reply) => {
@@ -71,8 +43,7 @@ app.addHook('preHandler', async (request, reply) => {
     request.url.startsWith('/api/auth/reset-password') ||
     request.url.startsWith('/api/auth/logout') ||
     request.url.startsWith('/api/auth/me') ||
-    request.url === '/api/health' ||
-    request.url.startsWith('/api/events')
+    request.url === '/api/health'
   ) {
     return;
   }

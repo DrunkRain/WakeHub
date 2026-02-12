@@ -49,11 +49,8 @@ describe('AppShell', () => {
       </AppShell>
     );
 
-    // Check that navigation links are present (may appear multiple times due to responsive nav)
-    expect(screen.getAllByLabelText('Dashboard')[0]).toBeInTheDocument();
-    expect(screen.getAllByLabelText('Services')[0]).toBeInTheDocument();
-    expect(screen.getAllByLabelText('Settings')[0]).toBeInTheDocument();
-    expect(screen.getAllByLabelText('Logs')[0]).toBeInTheDocument();
+    // Check that navigation link is present (may appear multiple times due to responsive nav)
+    expect(screen.getAllByLabelText('Accueil')[0]).toBeInTheDocument();
   });
 
   it('renders children in the main content area', () => {

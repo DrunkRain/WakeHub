@@ -1,4 +1,4 @@
-# generated: 2026-02-09
+# generated: 2026-02-12
 # project: WakeHub
 # project_key: NOKEY
 # tracking_system: file-system
@@ -11,29 +11,14 @@
 #   - in-progress: Epic actively being worked on
 #   - done: All stories in epic completed
 #
-# Epic Status Transitions:
-#   - backlog → in-progress: Automatically when first story is created (via create-story)
-#   - in-progress → done: Manually when all stories reach 'done' status
-#
 # Story Status:
 #   - backlog: Story only exists in epic file
 #   - ready-for-dev: Story file created in stories folder
 #   - in-progress: Developer actively working on implementation
-#   - review: Ready for code review (via Dev's code-review workflow)
+#   - review: Ready for code review
 #   - done: Story completed
-#
-# Retrospective Status:
-#   - optional: Can be completed but not required
-#   - done: Retrospective has been completed
-#
-# WORKFLOW NOTES:
-# ===============
-# - Epic transitions to 'in-progress' automatically when first story is created
-# - Stories can be worked in parallel if team capacity allows
-# - SM typically creates next story after previous one is 'done' to incorporate learnings
-# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-02-09
+generated: 2026-02-12
 project: WakeHub
 project_key: NOKEY
 tracking_system: file-system
@@ -49,52 +34,5 @@ development_status:
   1-5-reinitialisation-du-mot-de-passe: done
   epic-1-retrospective: optional
 
-  # Epic 2 : Gestion de l'Infrastructure
-  epic-2: done
-  2-1-ajout-dune-machine-physique-wol-ssh: done
-  2-2-ajout-dun-serveur-proxmox-et-decouverte-des-vms: done
-  2-3-ajout-dun-hote-docker-et-decouverte-des-conteneurs: done
-  2-4-page-machines-et-vue-tabulaire: done
-  2-5-page-detail-machine-modification-et-suppression: done
-  epic-2-retrospective: optional
-
-  # Epic 3 : Configuration des Dependances
-  epic-3: done
-  3-1-definition-des-dependances-et-moteur-de-graphe: done
-  3-2-visualisation-du-graphe-de-dependances: done
-  3-3-modification-et-suppression-de-dependances: done
-  epic-3-retrospective: optional
-
-  # Epic 4 : Dashboard & Controle d'Alimentation
-  # Ref: sprint-change-proposal-2026-02-12-cascade-structurelle-vs-dependance.md
-  epic-4: done
-  4-1-moteur-de-cascade-et-orchestration: done
-  4-2-endpoint-sse-et-communication-temps-reel: done
-  4-3-dashboard-servicetiles-et-statsbar: done
-  4-4-cascadeprogress-et-feedback-visuel: done
-  4-5-servicedetailpanel: done
-  4-6-arret-manuel-avec-confirmation-et-cascade-descendante: done
-  4-7-distinction-cascade-structurelle-vs-dependance: done
-  epic-4-retrospective: optional
-
-  # Epic 7 : Refactoring — Modele Unifie Services
-  # Ref: sprint-change-proposal-2026-02-11.md
-  epic-7: done
-  7-1-schema-db-migration-et-types-shared: done
-  7-2-backend-routes-et-connectors: done
-  7-3-frontend-api-hooks-et-components: done
-  7-4-tests-build-et-nettoyage: done
-  7-5-comportement-uniforme-tous-services: done
-  epic-7-retrospective: optional
-
-  # Epic 5 : Arret Automatique sur Inactivite
-  epic-5: in-progress
-  5-1-moteur-de-surveillance-dinactivite: ready-for-dev
-  5-2-protection-des-dependances-partagees-et-configuration-ui: backlog
-  epic-5-retrospective: optional
-
-  # Epic 6 : Journalisation & Diagnostic
-  epic-6: backlog
-  6-1-enrichissement-du-logging-et-persistance-complete: backlog
-  6-2-page-logs-et-interface-de-diagnostic: backlog
-  epic-6-retrospective: optional
+  # Epic 2 : A definir (nouvel axe)
+  epic-2: backlog
