@@ -1,0 +1,38 @@
+.link {
+  text-decoration: none;
+  color: inherit;
+}
+
+.linkButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: var(--mantine-radius-md);
+  color: var(--mantine-color-dark-0);
+  font-size: var(--mantine-font-size-sm);
+  font-weight: 500;
+  transition: background-color 0.15s ease;
+  min-height: 44px;
+  min-width: 44px;
+  cursor: pointer;
+}
+
+.linkButton:hover {
+  background-color: var(--mantine-color-dark-6);
+}
+
+.linkActive .linkButton {
+  background-color: var(--mantine-color-blue-4);
+  color: white;
+}
+
+.linkLabel {
+  display: inline;
+}
+
+@media (max-width: 768px) {
+  .linkLabel {
+    display: none;
+  }
+}

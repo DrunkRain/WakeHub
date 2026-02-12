@@ -1,0 +1,35 @@
+node_modules
+dist
+*.local
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Database
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+data/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.sw?
+
+# OS
+Thumbs.db
+
+# Drizzle
+drizzle/meta
+
+# Build
+*.tsbuildinfo

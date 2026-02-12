@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WakeHub — Design Directions</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-primary: #1A1B1E;
+    --bg-card: #25262B;
+    --bg-elevated: #2C2E33;
+    --accent: #339AF0;
+    --accent-hover: #228BE6;
+    --green: #51CF66;
+    --gray: #868E96;
+    --yellow: #FCC419;
+    --red: #FF6B6B;
+    --orange: #FF922B;
+    --text-primary: #C1C2C5;
+    --text-secondary: #909296;
+    --text-white: #FFFFFF;
+    --border: #373A40;
+    --radius: 8px;
+    --radius-lg: 12px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', sans-serif; background: #111; color: var(--text-primary); }
+
+  /* Navigation */
+  .nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #111; border-bottom: 1px solid var(--border); padding: 16px 32px; display: flex; align-items: center; gap: 16px; }
+  .nav h1 { font-size: 18px; color: var(--text-white); font-weight: 700; }
+  .nav-tabs { display: flex; gap: 8px; margin-left: 32px; flex-wrap: wrap; }
+  .nav-tab { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: inherit; font-size: 13px; transition: all 0.2s; }
+  .nav-tab:hover { border-color: var(--accent); color: var(--text-primary); }
+  .nav-tab.active { background: var(--accent); color: var(--text-white); border-color: var(--accent); }
+
+  /* Sections */
+  .section { display: none; padding: 80px 32px 32px; min-height: 100vh; }
+  .section.active { display: block; }
+  .section-title { font-size: 24px; font-weight: 700; color: var(--text-white); margin-bottom: 8px; }
+  .section-desc { font-size: 14px; color: var(--text-secondary); margin-bottom: 32px; max-width: 800px; line-height: 1.6; }
+
+  /* Mockup Container */
+  .mockup { background: var(--bg-primary); border-radius: var(--radius-lg); overflow: hidden; border: 1px solid var(--border); }
+
+  /* ===== DIRECTION 1: Classic Grid ===== */
+  .d1-shell { display: grid; grid-template-columns: 260px 1fr; grid-template-rows: 60px 1fr; height: 700px; }
+  .d1-header { grid-column: 1 / -1; background: var(--bg-card); display: flex; align-items: center; padding: 0 24px; gap: 24px; border-bottom: 1px solid var(--border); }
+  .d1-logo { font-size: 18px; font-weight: 700; color: var(--accent); }
+  .d1-summary { display: flex; gap: 16px; margin-left: auto; }
+  .d1-summary-tile { background: var(--bg-elevated); padding: 6px 16px; border-radius: 6px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .d1-sidebar { background: var(--bg-card); padding: 16px; border-right: 1px solid var(--border); }
+  .d1-nav-item { padding: 10px 16px; border-radius: 6px; font-size: 14px; color: var(--text-secondary); cursor: pointer; margin-bottom: 4px; display: flex; align-items: center; gap: 10px; }
+  .d1-nav-item.active { background: var(--accent); color: var(--text-white); }
+  .d1-nav-item:hover:not(.active) { background: var(--bg-elevated); }
+  .d1-main { padding: 24px; overflow-y: auto; }
+  .d1-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; }
+  .d1-card { background: var(--bg-card); border-radius: var(--radius); padding: 20px; border: 1px solid var(--border); position: relative; overflow: hidden; transition: all 0.2s; cursor: pointer; }
+  .d1-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .d1-card-icon { width: 48px; height: 48px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 22px; margin-bottom: 12px; }
+  .d1-card-name { font-size: 16px; font-weight: 600; color: var(--text-white); margin-bottom: 4px; }
+  .d1-card-status { font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .d1-card-status .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .d1-card-progress { position: absolute; bottom: 0; left: 0; right: 0; height: 3px; background: var(--bg-elevated); }
+  .d1-card-progress-bar { height: 100%; background: var(--accent); border-radius: 0 3px 0 0; transition: width 0.3s; }
+  .d1-card-open { display: inline-block; margin-top: 12px; padding: 6px 14px; background: var(--accent); color: var(--text-white); border-radius: 6px; font-size: 12px; font-weight: 500; }
+
+  /* ===== DIRECTION 2: Compact List ===== */
+  .d2-shell { display: grid; grid-template-columns: 80px 1fr; grid-template-rows: 60px 1fr; height: 700px; }
+  .d2-header { grid-column: 1 / -1; background: var(--bg-card); display: flex; align-items: center; padding: 0 24px; gap: 16px; border-bottom: 1px solid var(--border); }
+  .d2-sidebar { background: var(--bg-card); display: flex; flex-direction: column; align-items: center; padding: 16px 0; gap: 8px; border-right: 1px solid var(--border); }
+  .d2-nav-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; color: var(--text-secondary); cursor: pointer; }
+  .d2-nav-icon.active { background: var(--accent); color: var(--text-white); }
+  .d2-main { padding: 24px; overflow-y: auto; }
+  .d2-list-header { display: grid; grid-template-columns: 48px 1fr 120px 120px 100px; gap: 16px; padding: 12px 16px; font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+  .d2-list-item { display: grid; grid-template-columns: 48px 1fr 120px 120px 100px; gap: 16px; padding: 14px 16px; align-items: center; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.2s; }
+  .d2-list-item:hover { background: var(--bg-elevated); }
+  .d2-list-icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+  .d2-list-name { font-size: 14px; font-weight: 500; color: var(--text-white); }
+  .d2-badge { padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 500; text-align: center; }
+
+  /* ===== DIRECTION 3: Dashboard Tiles ===== */
+  .d3-shell { height: 700px; display: flex; flex-direction: column; }
+  .d3-header { background: var(--bg-card); display: flex; align-items: center; padding: 0 24px; height: 60px; border-bottom: 1px solid var(--border); gap: 24px; }
+  .d3-main { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 24px; }
+  .d3-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .d3-stat { background: var(--bg-card); border-radius: var(--radius); padding: 20px; border: 1px solid var(--border); }
+  .d3-stat-label { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .d3-stat-value { font-size: 28px; font-weight: 700; color: var(--text-white); }
+  .d3-stat-sub { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+  .d3-services { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .d3-tile { background: var(--bg-card); border-radius: var(--radius-lg); padding: 24px; border: 1px solid var(--border); position: relative; overflow: hidden; cursor: pointer; transition: all 0.2s; }
+  .d3-tile:hover { border-color: var(--accent); }
+  .d3-tile-header { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+  .d3-tile-icon { width: 56px; height: 56px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 26px; }
+  .d3-tile-info { flex: 1; }
+  .d3-tile-name { font-size: 18px; font-weight: 600; color: var(--text-white); }
+  .d3-tile-type { font-size: 12px; color: var(--text-secondary); }
+  .d3-tile-deps { font-size: 12px; color: var(--text-secondary); margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .d3-tile-deps span { color: var(--text-primary); }
+  .d3-tile-progress { position: absolute; bottom: 0; left: 0; right: 0; height: 3px; background: var(--bg-elevated); }
+  .d3-tile-progress-bar { height: 100%; border-radius: 0 3px 0 0; }
+  .d3-tile-actions { display: flex; gap: 8px; margin-top: 16px; }
+  .d3-tile-btn { padding: 8px 16px; border-radius: 6px; font-size: 12px; font-weight: 500; border: none; cursor: pointer; font-family: inherit; }
+
+  /* ===== DIRECTION 4: Minimal Cards ===== */
+  .d4-shell { height: 700px; display: flex; flex-direction: column; }
+  .d4-header { background: transparent; display: flex; align-items: center; padding: 24px 32px; gap: 24px; }
+  .d4-main { flex: 1; padding: 0 32px 32px; overflow-y: auto; }
+  .d4-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .d4-card { background: var(--bg-card); border-radius: 16px; padding: 24px; border: none; cursor: pointer; transition: all 0.3s; position: relative; overflow: hidden; }
+  .d4-card:hover { transform: scale(1.02); box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+  .d4-card-icon { width: 56px; height: 56px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 26px; margin-bottom: 16px; }
+  .d4-card-name { font-size: 18px; font-weight: 600; color: var(--text-white); margin-bottom: 4px; }
+  .d4-card-status { font-size: 13px; color: var(--text-secondary); }
+  .d4-card-progress { position: absolute; bottom: 0; left: 0; right: 0; height: 3px; }
+
+  /* ===== DIRECTION 5: Split View ===== */
+  .d5-shell { display: grid; grid-template-columns: 1fr 380px; height: 700px; }
+  .d5-left { display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+  .d5-header { background: var(--bg-card); display: flex; align-items: center; padding: 0 24px; height: 60px; border-bottom: 1px solid var(--border); gap: 16px; }
+  .d5-grid-area { flex: 1; padding: 24px; overflow-y: auto; }
+  .d5-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .d5-card { background: var(--bg-card); border-radius: var(--radius); padding: 16px; border: 1px solid var(--border); cursor: pointer; transition: all 0.2s; position: relative; overflow: hidden; }
+  .d5-card:hover { border-color: var(--accent); }
+  .d5-card.selected { border-color: var(--accent); background: rgba(51,154,240,0.05); }
+  .d5-right { background: var(--bg-card); padding: 24px; overflow-y: auto; }
+  .d5-detail-title { font-size: 22px; font-weight: 700; color: var(--text-white); margin-bottom: 16px; display: flex; align-items: center; gap: 12px; }
+  .d5-detail-section { margin-bottom: 20px; }
+  .d5-detail-label { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .d5-dep-chain { display: flex; flex-direction: column; gap: 8px; }
+  .d5-dep-item { display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--bg-elevated); border-radius: 6px; font-size: 13px; }
+  .d5-dep-arrow { color: var(--text-secondary); font-size: 12px; padding-left: 18px; }
+
+  /* ===== DIRECTION 6: Kanban Status ===== */
+  .d6-shell { height: 700px; display: flex; flex-direction: column; }
+  .d6-header { background: var(--bg-card); display: flex; align-items: center; padding: 0 24px; height: 60px; border-bottom: 1px solid var(--border); gap: 24px; }
+  .d6-main { flex: 1; padding: 24px; overflow-x: auto; display: flex; gap: 20px; }
+  .d6-column { min-width: 280px; flex: 1; display: flex; flex-direction: column; }
+  .d6-col-header { display: flex; align-items: center; gap: 8px; padding: 12px 0; margin-bottom: 12px; border-bottom: 2px solid; }
+  .d6-col-title { font-size: 14px; font-weight: 600; }
+  .d6-col-count { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--bg-elevated); }
+  .d6-item { background: var(--bg-card); border-radius: var(--radius); padding: 16px; border: 1px solid var(--border); margin-bottom: 12px; cursor: pointer; transition: all 0.2s; }
+  .d6-item:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .d6-item-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .d6-item-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+
+  /* Utilities */
+  .icon-bg-blue { background: rgba(51,154,240,0.15); color: var(--accent); }
+  .icon-bg-green { background: rgba(81,207,102,0.15); color: var(--green); }
+  .icon-bg-red { background: rgba(255,107,107,0.15); color: var(--red); }
+  .icon-bg-yellow { background: rgba(252,196,25,0.15); color: var(--yellow); }
+  .icon-bg-orange { background: rgba(255,146,43,0.15); color: var(--orange); }
+  .icon-bg-gray { background: rgba(134,142,150,0.15); color: var(--gray); }
+  .badge-green { background: rgba(81,207,102,0.15); color: var(--green); }
+  .badge-red { background: rgba(255,107,107,0.15); color: var(--red); }
+  .badge-yellow { background: rgba(252,196,25,0.15); color: var(--yellow); }
+  .badge-gray { background: rgba(134,142,150,0.15); color: var(--gray); }
+  .badge-orange { background: rgba(255,146,43,0.15); color: var(--orange); }
+  .mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <h1>WakeHub — Design Directions</h1>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="showSection('d1')">1. Classic Grid</button>
+    <button class="nav-tab" onclick="showSection('d2')">2. Compact List</button>
+    <button class="nav-tab" onclick="showSection('d3')">3. Dashboard Tiles</button>
+    <button class="nav-tab" onclick="showSection('d4')">4. Minimal Cards</button>
+    <button class="nav-tab" onclick="showSection('d5')">5. Split View</button>
+    <button class="nav-tab" onclick="showSection('d6')">6. Kanban Status</button>
+  </div>
+</nav>
+
+<!-- DIRECTION 1: Classic Grid with Sidebar -->
+<div id="d1" class="section active">
+  <h2 class="section-title">Direction 1 — Classic Grid + Sidebar</h2>
+  <p class="section-desc">Layout Homarr-like : sidebar de navigation persistante, grille de cartes 4 colonnes, summary tiles dans le header. Approche la plus proche de l'inspiration initiale. Equilibre entre familiarite et fonctionnalite.</p>
+  <div class="mockup">
+    <div class="d1-shell">
+      <div class="d1-header">
+        <div class="d1-logo">⚡ WakeHub</div>
+        <div class="d1-summary">
+          <div class="d1-summary-tile"><span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block"></span> 3 actifs</div>
+          <div class="d1-summary-tile"><span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--gray);display:inline-block"></span> 4 eteints</div>
+          <div class="d1-summary-tile"><span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--yellow);display:inline-block"></span> 1 en cours</div>
+        </div>
+      </div>
+      <div class="d1-sidebar">
+        <div class="d1-nav-item active">📊 Dashboard</div>
+        <div class="d1-nav-item">⚙️ Settings</div>
+        <div class="d1-nav-item">📋 Logs</div>
+        <div class="d1-nav-item">🔗 Dependances</div>
+        <div class="d1-nav-item">🔔 Notifications</div>
+      </div>
+      <div class="d1-main">
+        <div class="d1-grid">
+          <div class="d1-card">
+            <div class="d1-card-icon icon-bg-green">🎬</div>
+            <div class="d1-card-name">Jellyfin</div>
+            <div class="d1-card-status"><span class="dot" style="background:var(--green)"></span> Actif</div>
+            <div class="d1-card-open">Ouvrir</div>
+          </div>
+          <div class="d1-card">
+            <div class="d1-card-icon icon-bg-yellow">☁️</div>
+            <div class="d1-card-name">Nextcloud</div>
+            <div class="d1-card-status"><span class="dot" style="background:var(--yellow)"></span> Demarrage...</div>
+            <div style="font-size:11px;color:var(--text-secondary);margin-top:10px">▶ VM-Storage en cours...</div>
+            <div class="d1-card-progress"><div class="d1-card-progress-bar" style="width:65%;background:var(--accent)"></div></div>
+          </div>
+          <div class="d1-card">
+            <div class="d1-card-icon icon-bg-green">📥</div>
+            <div class="d1-card-name">qBittorrent</div>
+            <div class="d1-card-status"><span class="dot" style="background:var(--green)"></span> Actif</div>
+            <div class="d1-card-open">Ouvrir</div>
+          </div>
+          <div class="d1-card">
+            <div class="d1-card-icon icon-bg-gray">🏠</div>
+            <div class="d1-card-name">Home Assistant</div>
+            <div class="d1-card-status"><span class="dot" style="background:var(--gray)"></span> Eteint</div>
+          </div>
+          <div class="d1-card">
+            <div class="d1-card-icon icon-bg-green">🔒</div>
+            <div class="d1-card-name">Vaultwarden</div>
+            <div class="d1-card-status"><span class="dot" style="background:var(--green)"></span> Actif</div>
+            <div class="d1-card-open">Ouvrir</div>
+          </div>
+          <div class="d1-card">
+            <div class="d1-card-icon icon-bg-gray">📊</div>
+            <div class="d1-card-name">Grafana</div>
+            <div class="d1-card-status"><span class="dot" style="background:var(--gray)"></span> Eteint</div>
+          </div>
+          <div class="d1-card">
+            <div class="d1-card-icon icon-bg-red">💾</div>
+            <div class="d1-card-name">Duplicati</div>
+            <div class="d1-card-status"><span class="dot" style="background:var(--red)"></span> Erreur</div>
+            <div style="font-size:11px;color:var(--red);margin-top:8px">Echec VM-Backup — timeout</div>
+          </div>
+          <div class="d1-card" style="border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;flex-direction:column;opacity:0.6">
+            <div style="font-size:32px;margin-bottom:8px">+</div>
+            <div style="font-size:13px;color:var(--text-secondary)">Nouveau service</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DIRECTION 2: Compact List -->
+<div id="d2" class="section">
+  <h2 class="section-title">Direction 2 — Compact List + Icon Sidebar</h2>
+  <p class="section-desc">Layout Portainer-like : sidebar icones seules (80px), vue en liste tabulaire avec toutes les infos sur une ligne. Maximum d'information visible, minimum d'espace utilise. Ideal pour les homelabs avec beaucoup de services.</p>
+  <div class="mockup">
+    <div class="d2-shell">
+      <div class="d2-header">
+        <span style="font-size:18px;font-weight:700;color:var(--accent)">⚡ WakeHub</span>
+        <span style="font-size:13px;color:var(--text-secondary);margin-left:auto">8 services — 3 actifs, 4 eteints, 1 en cours</span>
+      </div>
+      <div class="d2-sidebar">
+        <div class="d2-nav-icon active">📊</div>
+        <div class="d2-nav-icon">⚙️</div>
+        <div class="d2-nav-icon">📋</div>
+        <div class="d2-nav-icon">🔗</div>
+        <div class="d2-nav-icon">🔔</div>
+      </div>
+      <div class="d2-main">
+        <div class="d2-list-header">
+          <span></span><span>Service</span><span>Statut</span><span>Plateforme</span><span>Action</span>
+        </div>
+        <div class="d2-list-item">
+          <div class="d2-list-icon icon-bg-green">🎬</div>
+          <div><div class="d2-list-name">Jellyfin</div><div class="mono" style="color:var(--text-secondary)">192.168.1.50:8096</div></div>
+          <div class="d2-badge badge-green">Actif</div>
+          <div style="font-size:12px;color:var(--text-secondary)">Docker — VM-Media</div>
+          <div><button style="padding:6px 12px;border-radius:6px;background:var(--accent);color:white;border:none;cursor:pointer;font-size:12px">Ouvrir</button></div>
+        </div>
+        <div class="d2-list-item" style="background:rgba(51,154,240,0.03)">
+          <div class="d2-list-icon icon-bg-yellow">☁️</div>
+          <div><div class="d2-list-name">Nextcloud</div><div class="mono" style="color:var(--text-secondary)">192.168.1.50:8443</div></div>
+          <div class="d2-badge badge-yellow">En cours — 65%</div>
+          <div style="font-size:12px;color:var(--text-secondary)">Docker — VM-Storage</div>
+          <div style="font-size:11px;color:var(--yellow)">▶ VM-Storage...</div>
+        </div>
+        <div class="d2-list-item">
+          <div class="d2-list-icon icon-bg-green">📥</div>
+          <div><div class="d2-list-name">qBittorrent</div><div class="mono" style="color:var(--text-secondary)">192.168.1.50:8080</div></div>
+          <div class="d2-badge badge-green">Actif</div>
+          <div style="font-size:12px;color:var(--text-secondary)">Docker — NAS</div>
+          <div><button style="padding:6px 12px;border-radius:6px;background:var(--accent);color:white;border:none;cursor:pointer;font-size:12px">Ouvrir</button></div>
+        </div>
+        <div class="d2-list-item">
+          <div class="d2-list-icon icon-bg-gray">🏠</div>
+          <div><div class="d2-list-name">Home Assistant</div><div class="mono" style="color:var(--text-secondary)">192.168.1.30:8123</div></div>
+          <div class="d2-badge badge-gray">Eteint</div>
+          <div style="font-size:12px;color:var(--text-secondary)">Docker — RPi</div>
+          <div style="font-size:11px;color:var(--text-secondary)">Clic pour demarrer</div>
+        </div>
+        <div class="d2-list-item">
+          <div class="d2-list-icon icon-bg-green">🔒</div>
+          <div><div class="d2-list-name">Vaultwarden</div><div class="mono" style="color:var(--text-secondary)">192.168.1.50:4743</div></div>
+          <div class="d2-badge badge-green">Actif</div>
+          <div style="font-size:12px;color:var(--text-secondary)">Docker — VM-Apps</div>
+          <div><button style="padding:6px 12px;border-radius:6px;background:var(--accent);color:white;border:none;cursor:pointer;font-size:12px">Ouvrir</button></div>
+        </div>
+        <div class="d2-list-item">
+          <div class="d2-list-icon icon-bg-red">💾</div>
+          <div><div class="d2-list-name">Duplicati</div><div class="mono" style="color:var(--text-secondary)">192.168.1.50:8200</div></div>
+          <div class="d2-badge badge-red">Erreur</div>
+          <div style="font-size:12px;color:var(--text-secondary)">Docker — VM-Backup</div>
+          <div><button style="padding:6px 12px;border-radius:6px;background:var(--red);color:white;border:none;cursor:pointer;font-size:12px">Relancer</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DIRECTION 3: Dashboard Tiles -->
+<div id="d3" class="section">
+  <h2 class="section-title">Direction 3 — Dashboard Tiles + Stats</h2>
+  <p class="section-desc">Layout orienté data : bandeau de statistiques en haut (summary tiles), puis grille de cartes larges (3 colonnes) avec plus de details par carte. Montre les dependances directement sur chaque carte. Plus informatif, moins de services visibles.</p>
+  <div class="mockup">
+    <div class="d3-shell">
+      <div class="d3-header">
+        <span style="font-size:18px;font-weight:700;color:var(--accent)">⚡ WakeHub</span>
+        <div style="margin-left:auto;display:flex;gap:12px">
+          <span style="font-size:13px;color:var(--text-secondary)">📊 Dashboard</span>
+          <span style="font-size:13px;color:var(--text-secondary)">⚙️ Settings</span>
+          <span style="font-size:13px;color:var(--text-secondary)">📋 Logs</span>
+          <span style="font-size:13px;color:var(--text-secondary)">🔔 Notifications</span>
+        </div>
+      </div>
+      <div class="d3-main">
+        <div class="d3-stats">
+          <div class="d3-stat">
+            <div class="d3-stat-label">Services actifs</div>
+            <div class="d3-stat-value" style="color:var(--green)">3</div>
+            <div class="d3-stat-sub">sur 8 configures</div>
+          </div>
+          <div class="d3-stat">
+            <div class="d3-stat-label">Cascades aujourd'hui</div>
+            <div class="d3-stat-value">7</div>
+            <div class="d3-stat-sub">100% reussies</div>
+          </div>
+          <div class="d3-stat">
+            <div class="d3-stat-label">Temps moyen cascade</div>
+            <div class="d3-stat-value">47s</div>
+            <div class="d3-stat-sub">-12% vs hier</div>
+          </div>
+          <div class="d3-stat">
+            <div class="d3-stat-label">Economie estimee</div>
+            <div class="d3-stat-value" style="color:var(--accent)">18h</div>
+            <div class="d3-stat-sub">machines eteintes aujourd'hui</div>
+          </div>
+        </div>
+        <div class="d3-services">
+          <div class="d3-tile">
+            <div class="d3-tile-header">
+              <div class="d3-tile-icon icon-bg-green">🎬</div>
+              <div class="d3-tile-info">
+                <div class="d3-tile-name">Jellyfin</div>
+                <div class="d3-tile-type">Conteneur Docker — VM-Media</div>
+              </div>
+              <div class="d2-badge badge-green" style="align-self:start">Actif</div>
+            </div>
+            <div class="d3-tile-deps">Dependances : <span>NAS → VM-Media → Jellyfin</span></div>
+            <div class="d3-tile-actions">
+              <div class="d3-tile-btn" style="background:var(--accent);color:white">Ouvrir</div>
+              <div class="d3-tile-btn" style="background:var(--bg-elevated);color:var(--text-secondary)">Stop</div>
+            </div>
+          </div>
+          <div class="d3-tile">
+            <div class="d3-tile-header">
+              <div class="d3-tile-icon icon-bg-yellow">☁️</div>
+              <div class="d3-tile-info">
+                <div class="d3-tile-name">Nextcloud</div>
+                <div class="d3-tile-type">Conteneur Docker — VM-Storage</div>
+              </div>
+              <div class="d2-badge badge-yellow" style="align-self:start">65%</div>
+            </div>
+            <div style="font-size:12px;color:var(--yellow);margin-top:8px">▶ Demarrage VM-Storage en cours...</div>
+            <div class="d3-tile-progress"><div class="d3-tile-progress-bar" style="width:65%;background:var(--accent)"></div></div>
+          </div>
+          <div class="d3-tile">
+            <div class="d3-tile-header">
+              <div class="d3-tile-icon icon-bg-red">💾</div>
+              <div class="d3-tile-info">
+                <div class="d3-tile-name">Duplicati</div>
+                <div class="d3-tile-type">Conteneur Docker — VM-Backup</div>
+              </div>
+              <div class="d2-badge badge-red" style="align-self:start">Erreur</div>
+            </div>
+            <div style="font-size:12px;color:var(--red);margin-top:8px">Echec : VM-Backup timeout apres 30s</div>
+            <div class="d3-tile-actions">
+              <div class="d3-tile-btn" style="background:var(--red);color:white">Relancer</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DIRECTION 4: Minimal Cards -->
+<div id="d4" class="section">
+  <h2 class="section-title">Direction 4 — Minimal Cards sans bordures</h2>
+  <p class="section-desc">Approche ultra-clean : pas de sidebar, pas de bordures sur les cartes, navigation en header. Les cartes flottent sur le fond. Effet hover avec scale et shadow. Look premium, minimaliste. Plus proche d'une app mobile.</p>
+  <div class="mockup">
+    <div class="d4-shell">
+      <div class="d4-header">
+        <span style="font-size:20px;font-weight:700;color:var(--text-white)">⚡ WakeHub</span>
+        <div style="display:flex;gap:24px;margin-left:48px">
+          <span style="font-size:14px;color:var(--accent);font-weight:500;border-bottom:2px solid var(--accent);padding-bottom:4px">Dashboard</span>
+          <span style="font-size:14px;color:var(--text-secondary)">Settings</span>
+          <span style="font-size:14px;color:var(--text-secondary)">Logs</span>
+          <span style="font-size:14px;color:var(--text-secondary)">Notifications</span>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:12px;align-items:center">
+          <span style="font-size:13px;color:var(--text-secondary)">3 actifs</span>
+          <span style="font-size:13px;color:var(--text-secondary)">·</span>
+          <span style="font-size:13px;color:var(--text-secondary)">4 eteints</span>
+        </div>
+      </div>
+      <div class="d4-main">
+        <div class="d4-grid">
+          <div class="d4-card">
+            <div class="d4-card-icon icon-bg-green">🎬</div>
+            <div class="d4-card-name">Jellyfin</div>
+            <div class="d4-card-status" style="color:var(--green)">● Actif</div>
+            <div style="margin-top:16px"><button style="padding:8px 20px;border-radius:8px;background:var(--accent);color:white;border:none;cursor:pointer;font-size:13px;font-weight:500">Ouvrir</button></div>
+          </div>
+          <div class="d4-card" style="background:linear-gradient(to bottom, rgba(51,154,240,0.08), var(--bg-card))">
+            <div class="d4-card-icon icon-bg-yellow">☁️</div>
+            <div class="d4-card-name">Nextcloud</div>
+            <div class="d4-card-status" style="color:var(--yellow)">◐ Demarrage...</div>
+            <div style="margin-top:12px;font-size:12px;color:var(--text-secondary)">VM-Storage en cours</div>
+            <div class="d4-card-progress" style="background:var(--bg-elevated)"><div style="height:3px;width:65%;background:var(--accent);border-radius:0 3px 0 0"></div></div>
+          </div>
+          <div class="d4-card">
+            <div class="d4-card-icon icon-bg-green">📥</div>
+            <div class="d4-card-name">qBittorrent</div>
+            <div class="d4-card-status" style="color:var(--green)">● Actif</div>
+            <div style="margin-top:16px"><button style="padding:8px 20px;border-radius:8px;background:var(--accent);color:white;border:none;cursor:pointer;font-size:13px;font-weight:500">Ouvrir</button></div>
+          </div>
+          <div class="d4-card">
+            <div class="d4-card-icon icon-bg-gray">🏠</div>
+            <div class="d4-card-name">Home Assistant</div>
+            <div class="d4-card-status">● Eteint</div>
+          </div>
+          <div class="d4-card">
+            <div class="d4-card-icon icon-bg-green">🔒</div>
+            <div class="d4-card-name">Vaultwarden</div>
+            <div class="d4-card-status" style="color:var(--green)">● Actif</div>
+            <div style="margin-top:16px"><button style="padding:8px 20px;border-radius:8px;background:var(--accent);color:white;border:none;cursor:pointer;font-size:13px;font-weight:500">Ouvrir</button></div>
+          </div>
+          <div class="d4-card">
+            <div class="d4-card-icon icon-bg-gray">📊</div>
+            <div class="d4-card-name">Grafana</div>
+            <div class="d4-card-status">● Eteint</div>
+          </div>
+          <div class="d4-card">
+            <div class="d4-card-icon icon-bg-red">💾</div>
+            <div class="d4-card-name">Duplicati</div>
+            <div class="d4-card-status" style="color:var(--red)">✕ Erreur</div>
+            <div style="margin-top:16px"><button style="padding:8px 20px;border-radius:8px;background:rgba(255,107,107,0.15);color:var(--red);border:none;cursor:pointer;font-size:13px;font-weight:500">Relancer</button></div>
+          </div>
+          <div class="d4-card" style="display:flex;align-items:center;justify-content:center;flex-direction:column;opacity:0.4">
+            <div style="font-size:36px;margin-bottom:8px;color:var(--text-secondary)">+</div>
+            <div style="font-size:13px;color:var(--text-secondary)">Ajouter</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DIRECTION 5: Split View -->
+<div id="d5" class="section">
+  <h2 class="section-title">Direction 5 — Split View (Grille + Detail)</h2>
+  <p class="section-desc">Layout master-detail : grille de cartes a gauche, panneau de detail a droite. Cliquer sur une carte affiche ses dependances, logs recents et actions dans le panneau. Permet de voir le dashboard ET les details sans naviguer.</p>
+  <div class="mockup">
+    <div class="d5-shell">
+      <div class="d5-left">
+        <div class="d5-header">
+          <span style="font-size:18px;font-weight:700;color:var(--accent)">⚡ WakeHub</span>
+          <div style="margin-left:auto;display:flex;gap:12px">
+            <span style="font-size:13px;color:var(--accent)">Dashboard</span>
+            <span style="font-size:13px;color:var(--text-secondary)">Settings</span>
+            <span style="font-size:13px;color:var(--text-secondary)">Logs</span>
+          </div>
+        </div>
+        <div class="d5-grid-area">
+          <div class="d5-grid">
+            <div class="d5-card selected">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                <div style="width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px" class="icon-bg-green">🎬</div>
+                <div><div style="font-size:14px;font-weight:600;color:var(--text-white)">Jellyfin</div></div>
+              </div>
+              <div class="d2-badge badge-green" style="display:inline-block">Actif</div>
+            </div>
+            <div class="d5-card">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                <div style="width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px" class="icon-bg-yellow">☁️</div>
+                <div><div style="font-size:14px;font-weight:600;color:var(--text-white)">Nextcloud</div></div>
+              </div>
+              <div class="d2-badge badge-yellow" style="display:inline-block">65%</div>
+              <div style="position:absolute;bottom:0;left:0;right:0;height:3px;background:var(--bg-elevated)"><div style="height:100%;width:65%;background:var(--accent)"></div></div>
+            </div>
+            <div class="d5-card">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                <div style="width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px" class="icon-bg-green">📥</div>
+                <div><div style="font-size:14px;font-weight:600;color:var(--text-white)">qBittorrent</div></div>
+              </div>
+              <div class="d2-badge badge-green" style="display:inline-block">Actif</div>
+            </div>
+            <div class="d5-card">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                <div style="width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px" class="icon-bg-gray">🏠</div>
+                <div><div style="font-size:14px;font-weight:600;color:var(--text-white)">Home Assistant</div></div>
+              </div>
+              <div class="d2-badge badge-gray" style="display:inline-block">Eteint</div>
+            </div>
+            <div class="d5-card">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                <div style="width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px" class="icon-bg-green">🔒</div>
+                <div><div style="font-size:14px;font-weight:600;color:var(--text-white)">Vaultwarden</div></div>
+              </div>
+              <div class="d2-badge badge-green" style="display:inline-block">Actif</div>
+            </div>
+            <div class="d5-card">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                <div style="width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px" class="icon-bg-red">💾</div>
+                <div><div style="font-size:14px;font-weight:600;color:var(--text-white)">Duplicati</div></div>
+              </div>
+              <div class="d2-badge badge-red" style="display:inline-block">Erreur</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="d5-right">
+        <div class="d5-detail-title"><span style="font-size:28px">🎬</span> Jellyfin</div>
+        <div class="d5-detail-section">
+          <div class="d5-detail-label">Statut</div>
+          <div class="d2-badge badge-green" style="display:inline-block;font-size:13px;padding:6px 14px">Actif depuis 2h</div>
+        </div>
+        <div class="d5-detail-section">
+          <div class="d5-detail-label">Chaine de dependances</div>
+          <div class="d5-dep-chain">
+            <div class="d5-dep-item"><span style="width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:12px" class="icon-bg-green">🖥️</span> NAS Synology <span class="d2-badge badge-green" style="margin-left:auto">Actif</span></div>
+            <div class="d5-dep-arrow">↓</div>
+            <div class="d5-dep-item"><span style="width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:12px" class="icon-bg-green">🖥️</span> VM-Media <span class="d2-badge badge-green" style="margin-left:auto">Actif</span></div>
+            <div class="d5-dep-arrow">↓</div>
+            <div class="d5-dep-item"><span style="width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:12px" class="icon-bg-green">🎬</span> Jellyfin <span class="d2-badge badge-green" style="margin-left:auto">Actif</span></div>
+          </div>
+        </div>
+        <div class="d5-detail-section">
+          <div class="d5-detail-label">Logs recents</div>
+          <div style="font-size:12px;font-family:'JetBrains Mono',monospace;background:var(--bg-elevated);padding:12px;border-radius:6px;line-height:1.8;color:var(--text-secondary)">
+            14:32 — Cascade demarree<br>
+            14:32 — NAS OK (deja actif)<br>
+            14:33 — VM-Media demarree (28s)<br>
+            14:33 — Jellyfin demarre (4s)<br>
+            14:33 — Service disponible
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:20px">
+          <button style="padding:10px 24px;border-radius:8px;background:var(--accent);color:white;border:none;cursor:pointer;font-size:14px;font-weight:500">Ouvrir</button>
+          <button style="padding:10px 24px;border-radius:8px;background:var(--bg-elevated);color:var(--text-secondary);border:1px solid var(--border);cursor:pointer;font-size:14px">Arreter</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DIRECTION 6: Kanban Status -->
+<div id="d6" class="section">
+  <h2 class="section-title">Direction 6 — Kanban par statut</h2>
+  <p class="section-desc">Layout Kanban : les services sont regroupes en colonnes par statut (Actif, En cours, Eteint, Erreur). Vision instantanee de l'etat global. Les services se deplacent entre colonnes en temps reel. Approche originale et visuelle.</p>
+  <div class="mockup">
+    <div class="d6-shell">
+      <div class="d6-header">
+        <span style="font-size:18px;font-weight:700;color:var(--accent)">⚡ WakeHub</span>
+        <div style="margin-left:auto;display:flex;gap:16px">
+          <span style="font-size:13px;color:var(--accent)">Dashboard</span>
+          <span style="font-size:13px;color:var(--text-secondary)">Settings</span>
+          <span style="font-size:13px;color:var(--text-secondary)">Logs</span>
+          <span style="font-size:13px;color:var(--text-secondary)">Notifications</span>
+        </div>
+      </div>
+      <div class="d6-main">
+        <div class="d6-column">
+          <div class="d6-col-header" style="border-color:var(--green)">
+            <span class="d6-col-title" style="color:var(--green)">Actif</span>
+            <span class="d6-col-count">3</span>
+          </div>
+          <div class="d6-item">
+            <div class="d6-item-header"><div class="d6-item-icon icon-bg-green">🎬</div><span style="font-weight:500;color:var(--text-white)">Jellyfin</span></div>
+            <div style="font-size:12px;color:var(--text-secondary)">Actif depuis 2h · VM-Media</div>
+            <div style="margin-top:10px"><button style="padding:5px 12px;border-radius:5px;background:var(--accent);color:white;border:none;cursor:pointer;font-size:11px">Ouvrir</button></div>
+          </div>
+          <div class="d6-item">
+            <div class="d6-item-header"><div class="d6-item-icon icon-bg-green">📥</div><span style="font-weight:500;color:var(--text-white)">qBittorrent</span></div>
+            <div style="font-size:12px;color:var(--text-secondary)">Actif depuis 72h · NAS</div>
+            <div style="margin-top:10px"><button style="padding:5px 12px;border-radius:5px;background:var(--accent);color:white;border:none;cursor:pointer;font-size:11px">Ouvrir</button></div>
+          </div>
+          <div class="d6-item">
+            <div class="d6-item-header"><div class="d6-item-icon icon-bg-green">🔒</div><span style="font-weight:500;color:var(--text-white)">Vaultwarden</span></div>
+            <div style="font-size:12px;color:var(--text-secondary)">Actif depuis 5h · VM-Apps</div>
+            <div style="margin-top:10px"><button style="padding:5px 12px;border-radius:5px;background:var(--accent);color:white;border:none;cursor:pointer;font-size:11px">Ouvrir</button></div>
+          </div>
+        </div>
+        <div class="d6-column">
+          <div class="d6-col-header" style="border-color:var(--yellow)">
+            <span class="d6-col-title" style="color:var(--yellow)">En cours</span>
+            <span class="d6-col-count">1</span>
+          </div>
+          <div class="d6-item" style="border-color:rgba(252,196,25,0.3)">
+            <div class="d6-item-header"><div class="d6-item-icon icon-bg-yellow">☁️</div><span style="font-weight:500;color:var(--text-white)">Nextcloud</span></div>
+            <div style="font-size:12px;color:var(--yellow)">▶ VM-Storage en cours — 65%</div>
+            <div style="margin-top:8px;height:3px;background:var(--bg-elevated);border-radius:3px"><div style="height:100%;width:65%;background:var(--accent);border-radius:3px"></div></div>
+          </div>
+        </div>
+        <div class="d6-column">
+          <div class="d6-col-header" style="border-color:var(--gray)">
+            <span class="d6-col-title" style="color:var(--gray)">Eteint</span>
+            <span class="d6-col-count">3</span>
+          </div>
+          <div class="d6-item">
+            <div class="d6-item-header"><div class="d6-item-icon icon-bg-gray">🏠</div><span style="font-weight:500;color:var(--text-white)">Home Assistant</span></div>
+            <div style="font-size:12px;color:var(--text-secondary)">Arret auto il y a 3h</div>
+          </div>
+          <div class="d6-item">
+            <div class="d6-item-header"><div class="d6-item-icon icon-bg-gray">📊</div><span style="font-weight:500;color:var(--text-white)">Grafana</span></div>
+            <div style="font-size:12px;color:var(--text-secondary)">Arret auto il y a 6h</div>
+          </div>
+          <div class="d6-item">
+            <div class="d6-item-header"><div class="d6-item-icon icon-bg-gray">🔍</div><span style="font-weight:500;color:var(--text-white)">Pi-hole</span></div>
+            <div style="font-size:12px;color:var(--text-secondary)">Arret manuel hier</div>
+          </div>
+        </div>
+        <div class="d6-column">
+          <div class="d6-col-header" style="border-color:var(--red)">
+            <span class="d6-col-title" style="color:var(--red)">Erreur</span>
+            <span class="d6-col-count">1</span>
+          </div>
+          <div class="d6-item" style="border-color:rgba(255,107,107,0.3)">
+            <div class="d6-item-header"><div class="d6-item-icon icon-bg-red">💾</div><span style="font-weight:500;color:var(--text-white)">Duplicati</span></div>
+            <div style="font-size:12px;color:var(--red)">VM-Backup timeout</div>
+            <div style="margin-top:10px"><button style="padding:5px 12px;border-radius:5px;background:rgba(255,107,107,0.15);color:var(--red);border:none;cursor:pointer;font-size:11px">Relancer</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function showSection(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

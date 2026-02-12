@@ -1,0 +1,125 @@
+import Fastify from 'fastify';
+import fastifySwagger from '@fastify/swagger';
+import fastifySwaggerUi from '@fastify/swagger-ui';
+import fastifyStatic from '@fastify/static';
+import fastifyCookie from '@fastify/cookie';
+import fastifyCors from '@fastify/cors';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { config } from './config.js';
+
+// Establish database connection
+import { db } from './db/index.js';
+import authRoutes from './routes/auth.js';
+import servicesRoutes from './routes/services.routes.js';
+import dependenciesRoutes from './routes/dependencies.routes.js';
+import cascadesRoutes from './routes/cascades.routes.js';
+import statsRoutes from './routes/stats.routes.js';
+import { authMiddleware, cleanExpiredSessions } from './middleware/auth.middleware.js';
+import { SSEManager } from './sse/sse-manager.js';
+import eventsRoutes from './routes/events.routes.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const app = Fastify({ logger: true });
+
+// Inject db into app context
+app.decorate('db', db);
+
+// SSE Manager — singleton for real-time event broadcasting (Story 4.2)
+const sseManager = new SSEManager();
+app.decorate('sseManager', sseManager);
+app.addHook('onClose', () => {
+  sseManager.close();
+});
+
+await app.register(fastifyCookie);
+
+// CORS — allow credentials (cookies) from dev frontend
+await app.register(fastifyCors, {
+  origin: true,
+  credentials: true,
+});
+
+// Register auth routes (public - Story 1.3 & 1.4)
+await app.register(authRoutes);
+
+// Register services routes (unified machines + resources — Story 7.2)
+await app.register(servicesRoutes);
+
+// Register dependencies routes (Story 3.1)
+await app.register(dependenciesRoutes);
+
+// Register cascades routes (Story 4.1)
+await app.register(cascadesRoutes);
+
+// Register stats route (Story 4.3)
+await app.register(statsRoutes);
+
+// Register SSE events route (Story 4.2) — handles its own auth
+await app.register(eventsRoutes);
+
+// Register auth middleware on all /api routes except auth routes (Story 1.4)
+app.addHook('preHandler', async (request, reply) => {
+  // Skip middleware for non-API routes and public auth routes
+  if (
+    !request.url.startsWith('/api') ||
+    request.url.startsWith('/api/auth/login') ||
+    request.url.startsWith('/api/auth/register') ||
+    request.url.startsWith('/api/auth/check-setup') ||
+    request.url.startsWith('/api/auth/get-security-question') ||
+    request.url.startsWith('/api/auth/reset-password') ||
+    request.url.startsWith('/api/auth/logout') ||
+    request.url.startsWith('/api/auth/me') ||
+    request.url === '/api/health' ||
+    request.url.startsWith('/api/events')
+  ) {
+    return;
+  }
+
+  await authMiddleware(request, reply);
+});
+
+await app.register(fastifySwagger, {
+  openapi: {
+    info: {
+      title: 'WakeHub API',
+      version: '0.1.0',
+    },
+  },
+});
+
+await app.register(fastifySwaggerUi, {
+  routePrefix: '/docs',
+});
+
+app.get('/api/health', async () => {
+  return { data: { status: 'ok' } };
+});
+
+
+if (config.nodeEnv === 'production') {
+  await app.register(fastifyStatic, {
+    root: path.join(__dirname, '../../web/dist'),
+    prefix: '/',
+  });
+
+  app.setNotFoundHandler(async (req, reply) => {
+    if (!req.url.startsWith('/api')) {
+      return reply.sendFile('index.html');
+    }
+    return reply.status(404).send({
+      error: { code: 'NOT_FOUND', message: 'Route not found' },
+    });
+  });
+}
+
+// Clean expired sessions on startup
+await cleanExpiredSessions();
+
+try {
+  await app.listen({ port: config.port, host: '0.0.0.0' });
+} catch (err) {
+  app.log.error(err);
+  process.exit(1);
+}

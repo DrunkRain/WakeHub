@@ -1,0 +1,20 @@
+services:
+  wakehub:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      network: host
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_PATH=/data/wakehub.sqlite
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - SESSION_SECRET=${SESSION_SECRET}
+    volumes:
+      - wakehub-data:/data
+    restart: unless-stopped
+
+volumes:
+  wakehub-data:

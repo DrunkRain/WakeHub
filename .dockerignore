@@ -1,0 +1,15 @@
+node_modules
+dist
+.env
+.env.local
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+data/
+.git
+.gitignore
+*.md
+docker-compose.yml
+.dockerignore
+_bmad/
+_bmad-output/
