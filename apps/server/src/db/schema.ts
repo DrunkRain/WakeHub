@@ -1,4 +1,5 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, foreignKey } from 'drizzle-orm/sqlite-core';
+import type { NodeCapabilities, PlatformRef } from '@wakehub/shared';
 
 /**
  * Table users — Gestion des comptes utilisateurs
@@ -55,3 +56,49 @@ export const sessions = sqliteTable('sessions', {
     .notNull()
     .$defaultFn(() => new Date()),
 });
+
+/**
+ * Table nodes — Arbre d'hébergement unifié (machines physiques, VMs, LXCs, conteneurs)
+ * Implémentée dans Story 2.1
+ */
+export const nodes = sqliteTable('nodes', {
+  id: text('id')
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  name: text('name').notNull(),
+  type: text('type', { enum: ['physical', 'vm', 'lxc', 'container'] }).notNull(),
+  status: text('status', { enum: ['online', 'offline', 'starting', 'stopping', 'error'] })
+    .notNull()
+    .default('offline'),
+  ipAddress: text('ip_address'),
+  macAddress: text('mac_address'),
+  sshUser: text('ssh_user'),
+  sshCredentialsEncrypted: text('ssh_credentials_encrypted'),
+  parentId: text('parent_id'),
+  capabilities: text('capabilities', { mode: 'json' })
+    .$type<NodeCapabilities>()
+    .default({}),
+  platformRef: text('platform_ref', { mode: 'json' })
+    .$type<PlatformRef | null>(),
+  serviceUrl: text('service_url'),
+  isPinned: integer('is_pinned', { mode: 'boolean' }).notNull().default(false),
+  confirmBeforeShutdown: integer('confirm_before_shutdown', { mode: 'boolean' })
+    .notNull()
+    .default(true),
+  discovered: integer('discovered', { mode: 'boolean' }).notNull().default(false),
+  configured: integer('configured', { mode: 'boolean' }).notNull().default(true),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+}, (table) => [
+  foreignKey({
+    columns: [table.parentId],
+    foreignColumns: [table.id],
+  }).onDelete('cascade'),
+  index('idx_nodes_parent_id').on(table.parentId),
+  index('idx_nodes_type').on(table.type),
+  index('idx_nodes_status').on(table.status),
+]);

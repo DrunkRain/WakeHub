@@ -34,8 +34,8 @@ development_status:
   1-5-reinitialisation-du-mot-de-passe: done
 
   # Epic 2 : Arbre d'Hebergement & Gestion des Noeuds
-  epic-2: backlog
-  2-1-ajout-machine-physique-et-base-technique: backlog
+  epic-2: in-progress
+  2-1-ajout-machine-physique-et-base-technique: review
   2-2-capacite-proxmox-et-decouverte-vms-lxcs: backlog
   2-3-capacite-docker-et-decouverte-conteneurs: backlog
   2-4-page-noeuds-et-vue-tabulaire: backlog

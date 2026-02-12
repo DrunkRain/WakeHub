@@ -11,3 +11,23 @@ export interface ApiError {
 }
 
 export type ApiResult<T> = ApiResponse<T> | ApiError;
+
+// Node models
+export type {
+  Node,
+  NodeType,
+  NodeStatus,
+  NodeCapabilities,
+  ProxmoxCapability,
+  DockerCapability,
+  PlatformRef,
+} from './models/node.js';
+
+// Node API types
+export type {
+  CreateNodeRequest,
+  UpdateNodeRequest,
+  TestConnectionResponse,
+  NodeListResponse,
+  NodeResponse,
+} from './api/nodes.js';
