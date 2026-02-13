@@ -46,14 +46,14 @@ describe('Router', () => {
     renderWithProviders(<AppRoutes />);
 
     // Wait for auth guard to resolve then show home page
-    expect(await screen.findByText('Bienvenue sur WakeHub')).toBeInTheDocument();
+    expect(await screen.findByText('Dashboard')).toBeInTheDocument();
   });
 
   it('marks the Accueil navigation link as active on home page', async () => {
     renderWithProviders(<AppRoutes />);
 
     // Wait for auth guard to resolve
-    await screen.findByText('Bienvenue sur WakeHub');
+    await screen.findByText('Dashboard');
 
     // Accueil link should be active
     const accueilButtons = screen.getAllByLabelText('Accueil');

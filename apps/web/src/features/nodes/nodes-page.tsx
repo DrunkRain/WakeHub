@@ -12,11 +12,13 @@ import {
   Table,
   Select,
   Skeleton,
+  ActionIcon,
+  Tooltip,
 } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
-import { IconServer, IconPlus, IconX } from '@tabler/icons-react';
+import { IconServer, IconPlus, IconX, IconPin, IconPinnedOff } from '@tabler/icons-react';
 import type { NodeStatus, NodeType } from '@wakehub/shared';
-import { useNodes } from '../../api/nodes.api';
+import { useNodes, useUpdateNode } from '../../api/nodes.api';
 import { AddMachineWizard } from './add-machine-wizard';
 import { StatusBadge } from '../../components/shared/status-badge';
 import { NodeTypeIcon } from '../../components/shared/node-type-icon';
@@ -63,6 +65,7 @@ export function NodesPage() {
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const { data, isLoading } = useNodes();
+  const updateNode = useUpdateNode();
 
   const isDesktop = useMediaQuery('(min-width: 992px)');
   const isMobile = useMediaQuery('(max-width: 767px)');
@@ -192,6 +195,16 @@ export function NodesPage() {
                       {node.name}
                     </Anchor>
                     <StatusBadge status={node.status as NodeStatus} />
+                    <Tooltip label={node.isPinned ? 'Désépingler du dashboard' : 'Épingler au dashboard'}>
+                      <ActionIcon
+                        variant="subtle"
+                        color={node.isPinned ? 'blue' : 'gray'}
+                        aria-label={node.isPinned ? `Désépingler ${node.name}` : `Épingler ${node.name}`}
+                        onClick={() => updateNode.mutate({ nodeId: node.id, data: { isPinned: !node.isPinned } })}
+                      >
+                        {node.isPinned ? <IconPin size={18} /> : <IconPinnedOff size={18} />}
+                      </ActionIcon>
+                    </Tooltip>
                   </Group>
                 ))}
               </Stack>
@@ -206,6 +219,7 @@ export function NodesPage() {
                     <Table.Th>Statut</Table.Th>
                     {isDesktop && <Table.Th>IP</Table.Th>}
                     {isDesktop && <Table.Th>Mis a jour</Table.Th>}
+                    <Table.Th></Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
@@ -221,6 +235,18 @@ export function NodesPage() {
                       <Table.Td><StatusBadge status={node.status as NodeStatus} /></Table.Td>
                       {isDesktop && <Table.Td>{node.ipAddress ?? '—'}</Table.Td>}
                       {isDesktop && <Table.Td>{formatRelativeDate(node.updatedAt)}</Table.Td>}
+                      <Table.Td>
+                        <Tooltip label={node.isPinned ? 'Désépingler du dashboard' : 'Épingler au dashboard'}>
+                          <ActionIcon
+                            variant="subtle"
+                            color={node.isPinned ? 'blue' : 'gray'}
+                            aria-label={node.isPinned ? `Désépingler ${node.name}` : `Épingler ${node.name}`}
+                            onClick={() => updateNode.mutate({ nodeId: node.id, data: { isPinned: !node.isPinned } })}
+                          >
+                            {node.isPinned ? <IconPin size={18} /> : <IconPinnedOff size={18} />}
+                          </ActionIcon>
+                        </Tooltip>
+                      </Table.Td>
                     </Table.Tr>
                   ))}
                 </Table.Tbody>

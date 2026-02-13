@@ -4,10 +4,12 @@ import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { eq } from 'drizzle-orm';
 import { users, operationLogs, sessions } from '../db/schema.js';
 import { extractSessionToken } from '../middleware/auth.middleware.js';
+import { config } from '../config.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
     db: BetterSQLite3Database<typeof import('../db/schema.js')>;
+    sseManager: import('../sse/sse-manager.js').SSEManager;
   }
   interface FastifyRequest {
     userId?: string;
@@ -164,7 +166,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       // Set HTTP-only cookie with session token
       reply.setCookie('session_token', token, {
         httpOnly: true,
-        secure: process.env['NODE_ENV'] === 'production',
+        secure: config.cookieSecure,
         sameSite: 'lax',
         path: '/',
         maxAge: 30 * 24 * 60 * 60, // 30 days in seconds
@@ -272,7 +274,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       // Set HTTP-only cookie with session token
       reply.setCookie('session_token', token, {
         httpOnly: true,
-        secure: process.env['NODE_ENV'] === 'production',
+        secure: config.cookieSecure,
         sameSite: 'lax',
         path: '/',
         maxAge: Math.floor(sessionDuration / 1000), // Convert to seconds

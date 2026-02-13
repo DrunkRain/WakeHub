@@ -130,3 +130,33 @@ export const dependencyLinks = sqliteTable('dependency_links', {
   index('idx_dependency_links_from').on(table.fromNodeId),
   index('idx_dependency_links_to').on(table.toNodeId),
 ]);
+
+/**
+ * Table cascades — Suivi des cascades de démarrage/arrêt orchestrées
+ * Implémentée dans Story 4.1
+ */
+export const cascades = sqliteTable('cascades', {
+  id: text('id')
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  nodeId: text('node_id').notNull(),
+  type: text('type', { enum: ['start', 'stop'] }).notNull(),
+  status: text('status', { enum: ['pending', 'in_progress', 'completed', 'failed'] })
+    .notNull()
+    .default('pending'),
+  currentStep: integer('current_step').notNull().default(0),
+  totalSteps: integer('total_steps').notNull().default(0),
+  failedStep: integer('failed_step'),
+  errorCode: text('error_code'),
+  errorMessage: text('error_message'),
+  startedAt: integer('started_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  completedAt: integer('completed_at', { mode: 'timestamp' }),
+}, (table) => [
+  foreignKey({
+    columns: [table.nodeId],
+    foreignColumns: [nodes.id],
+  }).onDelete('cascade'),
+  index('idx_cascades_node_id').on(table.nodeId),
+]);

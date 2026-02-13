@@ -8,6 +8,8 @@ interface Config {
   databasePath: string;
   encryptionKey: string;
   sessionSecret: string;
+  cookieSecure: boolean;
+  corsOrigin: string;
 }
 
 function getEnv(key: string, defaultValue?: string): string {
@@ -31,10 +33,18 @@ function getSecretWithDevDefault(key: string, nodeEnv: string): string {
 
 const nodeEnv = getEnv('NODE_ENV', 'development');
 
+function parseCookieSecure(value: string | undefined, nodeEnv: string): boolean {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return nodeEnv === 'production';
+}
+
 export const config: Config = {
   port: Number(getEnv('PORT', String(DEFAULT_PORT))),
   nodeEnv,
   databasePath: getEnv('DATABASE_PATH', './data/wakehub.sqlite'),
   encryptionKey: getSecretWithDevDefault('ENCRYPTION_KEY', nodeEnv),
   sessionSecret: getSecretWithDevDefault('SESSION_SECRET', nodeEnv),
+  cookieSecure: parseCookieSecure(process.env['COOKIE_SECURE'], nodeEnv),
+  corsOrigin: getEnv('CORS_ORIGIN', 'http://localhost:5173'),
 };

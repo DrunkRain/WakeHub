@@ -1,6 +1,6 @@
 # Story 2.4: Page Noeuds & vue tabulaire
 
-Status: review
+Status: Done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

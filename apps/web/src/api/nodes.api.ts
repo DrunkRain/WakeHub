@@ -217,6 +217,7 @@ export interface UpdateNodePayload {
   macAddress?: string;
   sshUser?: string;
   sshPassword?: string;
+  isPinned?: boolean;
 }
 
 export function useUpdateNode() {

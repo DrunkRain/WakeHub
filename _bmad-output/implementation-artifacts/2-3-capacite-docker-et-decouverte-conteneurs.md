@@ -1,6 +1,6 @@
 # Story 2.3: Capacite Docker & decouverte conteneurs
 
-Status: review
+Status: Done
 
 ## Story
 

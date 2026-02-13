@@ -1,6 +1,6 @@
 # Story 3.1: Définition des dépendances et moteur de graphe
 
-Status: review
+Status: Done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

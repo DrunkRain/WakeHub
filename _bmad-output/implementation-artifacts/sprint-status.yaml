@@ -34,26 +34,26 @@ development_status:
   1-5-reinitialisation-du-mot-de-passe: done
 
   # Epic 2 : Arbre d'Hebergement & Gestion des Noeuds
-  epic-2: in-progress
-  2-1-ajout-machine-physique-et-base-technique: review
-  2-2-capacite-proxmox-et-decouverte-vms-lxcs: review
-  2-fix-1-error-handling-creation-noeud: review
-  2-3-capacite-docker-et-decouverte-conteneurs: review
-  2-4-page-noeuds-et-vue-tabulaire: review
-  2-5-page-detail-noeud-modification-et-suppression: review
+  epic-2: done
+  2-1-ajout-machine-physique-et-base-technique: done
+  2-2-capacite-proxmox-et-decouverte-vms-lxcs: done
+  2-fix-1-error-handling-creation-noeud: done
+  2-3-capacite-docker-et-decouverte-conteneurs: done
+  2-4-page-noeuds-et-vue-tabulaire: done
+  2-5-page-detail-noeud-modification-et-suppression: done
 
   # Epic 3 : Dependances Fonctionnelles
-  epic-3: in-progress
-  3-1-definition-des-dependances-et-moteur-de-graphe: review
-  3-2-visualisation-du-graphe-de-dependances: review
+  epic-3: done
+  3-1-definition-des-dependances-et-moteur-de-graphe: done
+  3-2-visualisation-du-graphe-de-dependances: done
 
   # Epic 4 : Dashboard, Controle d'Alimentation & Temps Reel
-  epic-4: backlog
-  4-1-moteur-de-cascade-et-orchestration-deux-couches: backlog
-  4-2-endpoint-sse-et-communication-temps-reel: backlog
-  4-3-dashboard-epinglage-servicetiles-et-statsbar: backlog
-  4-4-cascadeprogress-et-feedback-visuel: backlog
-  4-5-servicedetailpanel-et-arret-manuel: backlog
+  epic-4: done
+  4-1-moteur-de-cascade-et-orchestration-deux-couches: done
+  4-2-endpoint-sse-et-communication-temps-reel: done
+  4-3-dashboard-epinglage-servicetiles-et-statsbar: done
+  4-4-cascadeprogress-et-feedback-visuel: done
+  4-5-servicedetailpanel-et-arret-manuel: done
 
   # Epic 5 : Arret Automatique sur Inactivite
   epic-5: backlog

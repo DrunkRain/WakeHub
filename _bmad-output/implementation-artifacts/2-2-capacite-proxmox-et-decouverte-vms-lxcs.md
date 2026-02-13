@@ -1,6 +1,6 @@
 # Story 2.2: Capacite Proxmox & decouverte VMs/LXCs
 
-Status: review
+Status: Done
 
 ## Story
 

@@ -1,6 +1,6 @@
 # Story 3.2: Visualisation du graphe de dépendances
 
-Status: review
+Status: Done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

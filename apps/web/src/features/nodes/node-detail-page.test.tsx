@@ -6,6 +6,7 @@ import { Notifications } from '@mantine/notifications';
 import { MemoryRouter, Routes, Route } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NodeDetailPage } from './node-detail-page';
+import { useCascadeStore } from '../../stores/cascade.store';
 import { theme } from '../../theme/theme';
 
 const mockNavigate = vi.fn();
@@ -189,6 +190,7 @@ function mockFetch(
 beforeEach(() => {
   vi.restoreAllMocks();
   mockNavigate.mockReset();
+  useCascadeStore.setState({ cascades: {} });
 });
 
 describe('NodeDetailPage', () => {
@@ -499,6 +501,62 @@ describe('NodeDetailPage', () => {
 
     expect(await screen.findByText('Supprimer la dependance')).toBeInTheDocument();
     expect(screen.getByText('Voulez-vous vraiment supprimer ce lien de dependance ?')).toBeInTheDocument();
+  });
+
+  // === Story 4.5: Power control section tests ===
+
+  it('should display "Contrôle d\'alimentation" section', async () => {
+    mockFetch(mockNode);
+    renderWithProviders();
+
+    expect(await screen.findByText("Contrôle d'alimentation")).toBeInTheDocument();
+  });
+
+  it('should show "Arrêter" button for online node', async () => {
+    mockFetch(mockNode); // mockNode has status: 'online'
+    renderWithProviders();
+
+    await screen.findByText('Mon Proxmox');
+    expect(screen.getByRole('button', { name: /Arrêter Mon Proxmox/i })).toBeInTheDocument();
+  });
+
+  it('should show "Démarrer" button for offline node', async () => {
+    mockFetch({ ...mockNode, status: 'offline' });
+    renderWithProviders();
+
+    await screen.findByText('Mon Proxmox');
+    expect(screen.getByRole('button', { name: /Démarrer Mon Proxmox/i })).toBeInTheDocument();
+  });
+
+  it('should open stop cascade confirmation modal from power control section', async () => {
+    const user = userEvent.setup();
+    mockFetch(mockNode); // status: 'online'
+    renderWithProviders();
+
+    await screen.findByText('Mon Proxmox');
+    await user.click(screen.getByRole('button', { name: /Arrêter Mon Proxmox/i }));
+
+    expect(await screen.findByText(/Arrêter Mon Proxmox \?/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Confirmer l'arrêt/i })).toBeInTheDocument();
+  });
+
+  it('should display CascadeProgress when cascade is active for this node', async () => {
+    useCascadeStore.setState({
+      cascades: {
+        'node-1': {
+          cascadeId: 'c-1',
+          step: 2,
+          totalSteps: 5,
+          currentNodeName: 'NAS-Storage',
+          status: 'in_progress',
+        },
+      },
+    });
+
+    mockFetch({ ...mockNode, status: 'starting' });
+    renderWithProviders();
+
+    expect(await screen.findByText('NAS-Storage')).toBeInTheDocument();
   });
 
   it('should delete dependency after confirmation', async () => {

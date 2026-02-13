@@ -132,7 +132,7 @@ const dependenciesRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(500).send({
           error: {
             code: 'DEPENDENCY_CREATION_FAILED',
-            message: (error as Error).message,
+            message: 'Impossible de créer le lien de dépendance',
           },
         });
       }
@@ -230,7 +230,7 @@ const dependenciesRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(500).send({
           error: {
             code: 'DEPENDENCY_QUERY_FAILED',
-            message: (error as Error).message,
+            message: 'Impossible de récupérer les dépendances',
           },
         });
       }
@@ -269,6 +269,7 @@ const dependenciesRoutes: FastifyPluginAsync = async (fastify) => {
                         id: { type: 'string' },
                         fromNodeId: { type: 'string' },
                         toNodeId: { type: 'string' },
+                        linkType: { type: 'string' },
                       },
                     },
                   },
@@ -282,16 +283,17 @@ const dependenciesRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (_request, reply) => {
       try {
-        const allNodes = await fastify.db
+        const allNodesRaw = await fastify.db
           .select({
             id: nodes.id,
             name: nodes.name,
             type: nodes.type,
             status: nodes.status,
+            parentId: nodes.parentId,
           })
           .from(nodes);
 
-        const allLinks = await fastify.db
+        const functionalLinks = await fastify.db
           .select({
             id: dependencyLinks.id,
             fromNodeId: dependencyLinks.fromNodeId,
@@ -299,13 +301,30 @@ const dependenciesRoutes: FastifyPluginAsync = async (fastify) => {
           })
           .from(dependencyLinks);
 
+        // Build structural links from parentId relationships
+        const structuralLinks = allNodesRaw
+          .filter((n) => n.parentId)
+          .map((n) => ({
+            id: `structural-${n.id}`,
+            fromNodeId: n.id,
+            toNodeId: n.parentId!,
+            linkType: 'structural' as const,
+          }));
+
+        const allLinks = [
+          ...functionalLinks.map((l) => ({ ...l, linkType: 'functional' as const })),
+          ...structuralLinks,
+        ];
+
+        const allNodes = allNodesRaw.map(({ parentId: _parentId, ...rest }) => rest);
+
         return { data: { nodes: allNodes, links: allLinks } };
       } catch (error) {
         fastify.log.error({ error: (error as Error).message }, 'Failed to get dependency graph');
         return reply.status(500).send({
           error: {
             code: 'DEPENDENCY_GRAPH_FAILED',
-            message: (error as Error).message,
+            message: 'Impossible de récupérer le graphe de dépendances',
           },
         });
       }
@@ -372,7 +391,7 @@ const dependenciesRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(500).send({
           error: {
             code: 'DEPENDENCY_DELETE_FAILED',
-            message: (error as Error).message,
+            message: 'Impossible de supprimer le lien de dépendance',
           },
         });
       }

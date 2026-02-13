@@ -1,6 +1,6 @@
 # Story 2.5: Page detail noeud, modification & suppression
 
-Status: review
+Status: Done
 
 ## Story
 

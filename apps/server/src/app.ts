@@ -13,6 +13,10 @@ import { db } from './db/index.js';
 import authRoutes from './routes/auth.js';
 import nodesRoutes from './routes/nodes.routes.js';
 import dependenciesRoutes from './routes/dependencies.routes.js';
+import cascadesRoutes from './routes/cascades.routes.js';
+import eventsRoutes from './routes/events.routes.js';
+import statsRoutes from './routes/stats.routes.js';
+import { SSEManager } from './sse/sse-manager.js';
 import { authMiddleware, cleanExpiredSessions } from './middleware/auth.middleware.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,11 +26,15 @@ const app = Fastify({ logger: true });
 // Inject db into app context
 app.decorate('db', db);
 
+// Inject SSE manager into app context (Story 4.2)
+const sseManager = new SSEManager();
+app.decorate('sseManager', sseManager);
+
 await app.register(fastifyCookie);
 
-// CORS — allow credentials (cookies) from dev frontend
+// CORS — restrict to configured origin
 await app.register(fastifyCors, {
-  origin: true,
+  origin: config.corsOrigin,
   credentials: true,
 });
 
@@ -38,6 +46,15 @@ await app.register(nodesRoutes);
 
 // Register dependencies routes (protected - Story 3.1)
 await app.register(dependenciesRoutes, { prefix: '/api/dependencies' });
+
+// Register cascades routes (protected - Story 4.1)
+await app.register(cascadesRoutes, { prefix: '/api/cascades' });
+
+// Register SSE events route (protected - Story 4.2)
+await app.register(eventsRoutes, { prefix: '/api' });
+
+// Register stats routes (protected - Story 4.3)
+await app.register(statsRoutes, { prefix: '/api/stats' });
 
 // Register auth middleware on all /api routes except auth routes (Story 1.4)
 app.addHook('preHandler', async (request, reply) => {

@@ -24,6 +24,7 @@ export interface DependencyGraphLink {
   id: string;
   fromNodeId: string;
   toNodeId: string;
+  linkType: 'structural' | 'functional';
 }
 
 export interface DependencyGraphResponse {

@@ -163,7 +163,7 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(500).send({
           error: {
             code: 'NODE_CREATION_FAILED',
-            message: (error as Error).message,
+            message: 'Impossible de créer le noeud',
           },
         });
       }
@@ -477,7 +477,7 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(500).send({
           error: {
             code: 'PROXMOX_SAVE_FAILED',
-            message: (error as Error).message,
+            message: 'Impossible de sauvegarder la configuration Proxmox',
           },
         });
       }
@@ -639,7 +639,7 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(500).send({
           error: {
             code: 'DOCKER_SAVE_FAILED',
-            message: (error as Error).message,
+            message: 'Impossible de sauvegarder la configuration Docker',
           },
         });
       }
@@ -752,7 +752,7 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   // PATCH /api/nodes/:id — Partial update of a node
-  fastify.patch<{ Params: { id: string }; Body: { name?: string; serviceUrl?: string; configured?: boolean; ipAddress?: string; macAddress?: string; sshUser?: string; sshPassword?: string } }>(
+  fastify.patch<{ Params: { id: string }; Body: { name?: string; serviceUrl?: string; configured?: boolean; ipAddress?: string; macAddress?: string; sshUser?: string; sshPassword?: string; isPinned?: boolean } }>(
     '/api/nodes/:id',
     {
       schema: {
@@ -771,6 +771,7 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
             macAddress: { type: 'string' },
             sshUser: { type: 'string' },
             sshPassword: { type: 'string' },
+            isPinned: { type: 'boolean' },
           },
         },
         response: {
@@ -805,6 +806,7 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         if (body.ipAddress !== undefined) updates.ipAddress = body.ipAddress;
         if (body.macAddress !== undefined) updates.macAddress = body.macAddress;
         if (body.sshUser !== undefined) updates.sshUser = body.sshUser;
+        if (body.isPinned !== undefined) updates.isPinned = body.isPinned;
         if (body.sshPassword !== undefined) {
           updates.sshCredentialsEncrypted = body.sshPassword === '' ? null : encrypt(body.sshPassword);
         }
@@ -821,7 +823,7 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(500).send({
           error: {
             code: 'NODE_UPDATE_FAILED',
-            message: (error as Error).message,
+            message: 'Impossible de mettre à jour le noeud',
           },
         });
       }

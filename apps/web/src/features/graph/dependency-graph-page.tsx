@@ -66,14 +66,33 @@ function transformToReactFlow(graphData: DependencyGraphResponse) {
       } as InfraNodeData,
     }));
 
-  const edges: Edge[] = graphData.links.map((l) => ({
-    id: l.id,
-    source: l.fromNodeId,
-    target: l.toNodeId,
-    type: 'smoothstep',
-    animated: false,
-    markerEnd: { type: MarkerType.ArrowClosed },
-  }));
+  // Build a status map for active-edge detection
+  const statusMap = new Map(graphData.nodes.map((n) => [n.id, n.status]));
+  const isActive = (id: string) => {
+    const s = statusMap.get(id);
+    return s === 'online' || s === 'starting';
+  };
+
+  const edges: Edge[] = graphData.links.map((l) => {
+    const active = isActive(l.fromNodeId) && isActive(l.toNodeId);
+    const isStructural = l.linkType === 'structural';
+    const stroke = active
+      ? 'var(--mantine-color-teal-5)'
+      : 'var(--mantine-color-gray-6)';
+
+    return {
+      id: l.id,
+      source: l.fromNodeId,
+      target: l.toNodeId,
+      type: 'smoothstep',
+      animated: false,
+      style: {
+        stroke,
+        strokeDasharray: isStructural ? undefined : '6 3',
+      },
+      markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+    };
+  });
 
   return getLayoutedElements(nodes, edges);
 }

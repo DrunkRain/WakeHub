@@ -40,3 +40,16 @@ Object.defineProperty(window, 'matchMedia', {
   observe() {}
   unobserve() {}
 };
+
+// Mock EventSource for SSE (Story 4.2)
+(globalThis as any).EventSource = class EventSource {
+  url: string;
+  withCredentials: boolean;
+  constructor(url: string, options?: { withCredentials?: boolean }) {
+    this.url = url;
+    this.withCredentials = options?.withCredentials ?? false;
+  }
+  addEventListener() {}
+  removeEventListener() {}
+  close() {}
+};

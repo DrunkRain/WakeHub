@@ -53,3 +53,28 @@ export type {
   DependencyGraphLink,
   DependencyGraphResponse,
 } from './api/dependencies.js';
+
+// Cascade models
+export type {
+  Cascade,
+  CascadeType,
+  CascadeStatus,
+} from './models/cascade.js';
+
+// Cascade API types
+export type {
+  StartCascadeRequest,
+  StopCascadeRequest,
+  CascadeResponse,
+  CascadeDetailResponse,
+} from './api/cascades.js';
+
+// SSE event types
+export type {
+  SSEEventType,
+  SSEStatusChangeEvent,
+  SSECascadeProgressEvent,
+  SSECascadeCompleteEvent,
+  SSECascadeErrorEvent,
+  SSEEvent,
+} from './models/sse-event.js';

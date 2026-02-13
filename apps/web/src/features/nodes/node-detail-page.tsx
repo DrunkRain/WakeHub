@@ -39,9 +39,12 @@ import {
   useTestConnection,
   useDeleteNode,
 } from '../../api/nodes.api';
+import { useStartCascade, useStopCascade } from '../../api/cascades.api';
 import { useDependencies, useCreateDependency, useDeleteDependency } from '../../api/dependencies.api';
+import { useCascadeForNode } from '../../stores/cascade.store';
 import { StatusBadge } from '../../components/shared/status-badge';
 import { NodeTypeIcon } from '../../components/shared/node-type-icon';
+import { CascadeProgress } from '../dashboard/cascade-progress';
 import { ConfigureProxmoxModal } from './configure-proxmox-modal';
 import { ConfigureDockerModal } from './configure-docker-modal';
 import { ConfigureDiscoveredModal } from './configure-discovered-modal';
@@ -64,8 +67,12 @@ export function NodeDetailPage() {
   const deleteNode = useDeleteNode();
   const { data: allNodesData } = useNodes();
   const { data: depsData } = useDependencies(id ?? '');
+  const startCascade = useStartCascade();
+  const stopCascade = useStopCascade();
+  const cascadeState = useCascadeForNode(id ?? '');
   const createDependency = useCreateDependency();
   const deleteDependency = useDeleteDependency();
+  const [stopCascadeModalOpened, setStopCascadeModalOpened] = useState(false);
   const [proxmoxModalOpened, setProxmoxModalOpened] = useState(false);
   const [dockerModalOpened, setDockerModalOpened] = useState(false);
   const [configureNodeId, setConfigureNodeId] = useState<string | null>(null);
@@ -213,11 +220,13 @@ export function NodeDetailPage() {
   const downstream = depsData?.data.downstream ?? [];
   const allNodes = allNodesData?.data.nodes ?? [];
 
-  // Build Select options: exclude current node and already-linked nodes
+  // Build Select options: exclude current node, already-linked nodes, and structural relatives
   const linkedNodeIds = new Set([
     ...upstream.map((d) => d.nodeId),
     ...downstream.map((d) => d.nodeId),
     id!,
+    ...(node.parentId ? [node.parentId] : []),
+    ...children.map((c) => c.id),
   ]);
   const nodeSelectOptions = allNodes
     .filter((n) => !linkedNodeIds.has(n.id))
@@ -464,6 +473,36 @@ export function NodeDetailPage() {
           </Card>
         )}
 
+        {/* Section Hierarchie structurelle */}
+        {node.parentId && (() => {
+          const parent = allNodes.find((n) => n.id === node.parentId);
+          return parent ? (
+            <Card withBorder>
+              <Stack gap="sm">
+                <Title order={4}>Hierarchie structurelle</Title>
+                <Text size="sm" fw={500}>Parent :</Text>
+                <Group p="xs" style={{ border: '1px solid var(--mantine-color-dark-4)', borderRadius: 'var(--mantine-radius-sm)' }}>
+                  <NodeTypeIcon type={parent.type as NodeType} size={18} />
+                  <Text size="sm">{parent.name}</Text>
+                  <StatusBadge status={parent.status as NodeStatus} size="xs" />
+                </Group>
+                {children.length > 0 && (
+                  <>
+                    <Text size="sm" fw={500}>Enfants ({children.length}) :</Text>
+                    {children.map((child) => (
+                      <Group key={child.id} p="xs" style={{ border: '1px solid var(--mantine-color-dark-4)', borderRadius: 'var(--mantine-radius-sm)' }}>
+                        <NodeTypeIcon type={child.type as NodeType} size={18} />
+                        <Text size="sm">{child.name}</Text>
+                        <StatusBadge status={child.status as NodeStatus} size="xs" />
+                      </Group>
+                    ))}
+                  </>
+                )}
+              </Stack>
+            </Card>
+          ) : null;
+        })()}
+
         {/* Section Dependances fonctionnelles */}
         <Card withBorder>
           <Stack gap="sm">
@@ -569,6 +608,75 @@ export function NodeDetailPage() {
           </Stack>
         </Card>
 
+        {/* Section Contrôle d'alimentation */}
+        <Card withBorder>
+          <Stack gap="sm">
+            <Title order={4}>Contrôle d'alimentation</Title>
+
+            {cascadeState && (
+              <CascadeProgress
+                step={cascadeState.step}
+                totalSteps={cascadeState.totalSteps}
+                currentNodeName={cascadeState.currentNodeName}
+                status={cascadeState.status}
+                errorNodeName={cascadeState.errorNodeName}
+              />
+            )}
+
+            <Group>
+              {node.status === 'offline' && (
+                <Button
+                  color="blue"
+                  aria-label={`Démarrer ${node.name}`}
+                  onClick={() => startCascade.mutate(id!)}
+                  loading={startCascade.isPending}
+                >
+                  Démarrer
+                </Button>
+              )}
+              {node.status === 'online' && node.serviceUrl && (
+                <Button
+                  color="blue"
+                  variant="light"
+                  aria-label={`Ouvrir ${node.name}`}
+                  onClick={() => window.open(node.serviceUrl!, '_blank', 'noopener,noreferrer')}
+                >
+                  Ouvrir
+                </Button>
+              )}
+              {node.status === 'online' && (
+                <Button
+                  color="red"
+                  aria-label={`Arrêter ${node.name}`}
+                  onClick={() => setStopCascadeModalOpened(true)}
+                >
+                  Arrêter
+                </Button>
+              )}
+              {node.status === 'error' && (
+                <Button
+                  color="orange"
+                  aria-label={`Réessayer ${node.name}`}
+                  onClick={() => startCascade.mutate(id!)}
+                  loading={startCascade.isPending}
+                >
+                  Réessayer
+                </Button>
+              )}
+              {node.status === 'starting' && (
+                <Button color="yellow" disabled loading>
+                  Démarrage…
+                </Button>
+              )}
+              {node.status === 'stopping' && (
+                <Button color="orange" disabled loading>
+                  Arrêt…
+                </Button>
+              )}
+            </Group>
+          </Stack>
+        </Card>
+
         {/* Actions */}
         <Card withBorder>
           <Stack gap="sm">
@@ -634,6 +742,44 @@ export function NodeDetailPage() {
               loading={deleteDependency.isPending}
             >
               Supprimer
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      {/* Stop Cascade Confirmation Modal */}
+      <Modal
+        opened={stopCascadeModalOpened}
+        onClose={() => setStopCascadeModalOpened(false)}
+        title={`Arrêter ${node.name} ?`}
+      >
+        <Stack gap="md">
+          <Text size="sm">
+            Cette action va arrêter {node.name} et ses dépendances en cascade :
+          </Text>
+          {downstream.length > 0 ? (
+            <Stack gap="xs">
+              {downstream.map((dep) => (
+                <Group key={dep.linkId} gap="xs">
+                  <NodeTypeIcon type={dep.type as NodeType} size={16} />
+                  <Text size="sm">{dep.name}</Text>
+                  <StatusBadge status={dep.status as NodeStatus} size="xs" />
+                </Group>
+              ))}
+            </Stack>
+          ) : (
+            <Text size="sm" c="dimmed">Aucune dépendance descendante ne sera affectée.</Text>
+          )}
+          <Group justify="flex-end" mt="md">
+            <Button variant="default" onClick={() => setStopCascadeModalOpened(false)}>
+              Annuler
+            </Button>
+            <Button
+              color="red"
+              onClick={() => { setStopCascadeModalOpened(false); stopCascade.mutate(id!); }}
+              loading={stopCascade.isPending}
+            >
+              Confirmer l'arrêt
             </Button>
           </Group>
         </Stack>
