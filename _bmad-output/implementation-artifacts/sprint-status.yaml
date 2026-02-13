@@ -36,9 +36,10 @@ development_status:
   # Epic 2 : Arbre d'Hebergement & Gestion des Noeuds
   epic-2: in-progress
   2-1-ajout-machine-physique-et-base-technique: review
-  2-2-capacite-proxmox-et-decouverte-vms-lxcs: backlog
-  2-3-capacite-docker-et-decouverte-conteneurs: backlog
-  2-4-page-noeuds-et-vue-tabulaire: backlog
+  2-2-capacite-proxmox-et-decouverte-vms-lxcs: review
+  2-fix-1-error-handling-creation-noeud: review
+  2-3-capacite-docker-et-decouverte-conteneurs: review
+  2-4-page-noeuds-et-vue-tabulaire: ready-for-dev
   2-5-page-detail-noeud-modification-et-suppression: backlog
 
   # Epic 3 : Dependances Fonctionnelles

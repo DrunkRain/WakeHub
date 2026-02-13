@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Container, Title, Text, Stack, Group, Button, Center } from '@mantine/core';
+import { Link } from 'react-router';
+import { Container, Title, Text, Stack, Group, Button, Center, Anchor } from '@mantine/core';
 import { IconServer, IconPlus } from '@tabler/icons-react';
 import { useNodes } from '../../api/nodes.api';
 import { AddMachineWizard } from './add-machine-wizard';
@@ -50,7 +51,7 @@ export function NodesPage() {
               <Group key={node.id} p="sm" style={{ border: '1px solid var(--mantine-color-dark-4)', borderRadius: 'var(--mantine-radius-sm)' }}>
                 <IconServer size={20} />
                 <div>
-                  <Text fw={500}>{node.name}</Text>
+                  <Anchor component={Link} to={`/nodes/${node.id}`} fw={500}>{node.name}</Anchor>
                   <Text size="sm" c="dimmed">{node.ipAddress ?? 'Pas d\'adresse IP'} — {node.status}</Text>
                 </div>
               </Group>

@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router';
 import { HomePage } from './features/home/home-page';
 import { NodesPage } from './features/nodes/nodes-page';
+import { NodeDetailPage } from './features/nodes/node-detail-page';
 import { FirstTimeSetup } from './features/auth/first-time-setup';
 import { LoginPage } from './features/auth/login-page';
 import { PasswordResetPage } from './features/auth/password-reset-page';
@@ -24,6 +25,7 @@ export function AppRoutes() {
               <Routes>
                 <Route path="/" element={<HomePage />} />
                 <Route path="/nodes" element={<NodesPage />} />
+                <Route path="/nodes/:id" element={<NodeDetailPage />} />
                 {/* Fallback: redirect 404 to Home */}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

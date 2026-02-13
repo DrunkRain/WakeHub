@@ -106,12 +106,14 @@ export function AddMachineWizard({ opened, onClose }: AddMachineWizardProps) {
       } else {
         setTestResult({ success: false, message: 'Adresse IP ou utilisateur SSH manquant — test impossible' });
       }
-    } catch {
+    } catch (error) {
+      const err = error as { error?: { message?: string } };
       notifications.show({
         title: 'Erreur',
-        message: 'Impossible de créer le noeud',
+        message: err.error?.message ?? 'Impossible de créer le noeud',
         color: 'red',
       });
+      console.error('Node creation failed:', error);
     }
   }
 

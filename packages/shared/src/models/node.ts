@@ -4,13 +4,21 @@ export type NodeStatus = 'online' | 'offline' | 'starting' | 'stopping' | 'error
 
 export interface ProxmoxCapability {
   host: string;
-  tokenId: string;
-  tokenSecret: string;
+  port?: number;
+  verifySsl?: boolean;
+  authType: 'token' | 'password';
+  // Token auth
+  tokenId?: string;
+  tokenSecretEncrypted?: string;
+  // Password auth
+  username?: string;
+  passwordEncrypted?: string;
 }
 
 export interface DockerCapability {
   host: string;
   port: number;
+  tlsEnabled?: boolean;
 }
 
 export interface NodeCapabilities {
@@ -21,6 +29,9 @@ export interface NodeCapabilities {
 export interface PlatformRef {
   platform: string;
   platformId: string;
+  node?: string;
+  vmid?: number;
+  type?: 'qemu' | 'lxc';
 }
 
 export interface Node {

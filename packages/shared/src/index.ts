@@ -27,6 +27,10 @@ export type {
 export type {
   CreateNodeRequest,
   UpdateNodeRequest,
+  ConfigureProxmoxRequest,
+  ConfigureDockerRequest,
+  DiscoveredResource,
+  DockerDiscoveredResource,
   TestConnectionResponse,
   NodeListResponse,
   NodeResponse,

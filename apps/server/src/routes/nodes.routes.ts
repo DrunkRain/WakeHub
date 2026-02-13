@@ -3,8 +3,12 @@ import { eq } from 'drizzle-orm';
 import { nodes, operationLogs } from '../db/schema.js';
 import { encrypt, decrypt } from '../utils/crypto.js';
 import { getConnector } from '../connectors/connector-factory.js';
+import { ProxmoxConnector } from '../connectors/proxmox.connector.js';
+import { ProxmoxClient } from '../connectors/proxmox-client.js';
+import { DockerClient } from '../connectors/docker-client.js';
+import { DockerConnector } from '../connectors/docker.connector.js';
 import { PlatformError } from '../utils/platform-error.js';
-import type { Node } from '@wakehub/shared';
+import type { Node, NodeCapabilities, ProxmoxCapability, ConfigureProxmoxRequest, ConfigureDockerRequest, DockerCapability } from '@wakehub/shared';
 
 const errorResponseSchema = {
   type: 'object' as const,
@@ -45,6 +49,14 @@ const nodeSchema = {
 
 function sanitizeNode(node: Record<string, unknown>): Omit<Node, 'sshCredentialsEncrypted'> {
   const { sshCredentialsEncrypted: _, ...safe } = node;
+
+  // Strip encrypted fields from capabilities.proxmox_api
+  const caps = safe.capabilities as NodeCapabilities | null;
+  if (caps?.proxmox_api) {
+    const { tokenSecretEncrypted, passwordEncrypted, ...safeCap } = caps.proxmox_api;
+    safe.capabilities = { ...caps, proxmox_api: safeCap } as unknown;
+  }
+
   return safe as Omit<Node, 'sshCredentialsEncrypted'>;
 }
 
@@ -109,49 +121,66 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
             },
           },
           400: errorResponseSchema,
+          500: errorResponseSchema,
         },
       },
     },
-    async (request, _reply) => {
+    async (request, reply) => {
       const { name, type, ipAddress, macAddress, sshUser, sshPassword, parentId, serviceUrl } = request.body;
 
-      // Encrypt SSH password if provided
-      const sshCredentialsEncrypted = sshPassword ? encrypt(sshPassword) : null;
+      try {
+        // Encrypt SSH password if provided
+        const sshCredentialsEncrypted = sshPassword ? encrypt(sshPassword) : null;
 
-      const [newNode] = await fastify.db
-        .insert(nodes)
-        .values({
-          name,
-          type,
-          ipAddress: ipAddress ?? null,
-          macAddress: macAddress ?? null,
-          sshUser: sshUser ?? null,
-          sshCredentialsEncrypted,
-          parentId: parentId ?? null,
-          serviceUrl: serviceUrl ?? null,
-          confirmBeforeShutdown: type === 'physical',
-        })
-        .returning();
+        const [newNode] = await fastify.db
+          .insert(nodes)
+          .values({
+            name,
+            type,
+            ipAddress: ipAddress ?? null,
+            macAddress: macAddress ?? null,
+            sshUser: sshUser ?? null,
+            sshCredentialsEncrypted,
+            parentId: parentId ?? null,
+            serviceUrl: serviceUrl ?? null,
+            confirmBeforeShutdown: type === 'physical',
+          })
+          .returning();
 
-      // Log the operation
-      await fastify.db.insert(operationLogs).values({
-        level: 'info',
-        source: 'nodes',
-        message: `Node created: ${name} (${type})`,
-        details: { nodeId: newNode!.id, type },
-      });
+        // Log the operation
+        await fastify.db.insert(operationLogs).values({
+          level: 'info',
+          source: 'nodes',
+          message: `Node created: ${name} (${type})`,
+          details: { nodeId: newNode!.id, type },
+        });
 
-      fastify.log.info({ nodeId: newNode!.id, type }, `Node created: ${name}`);
+        fastify.log.info({ nodeId: newNode!.id, type }, `Node created: ${name}`);
 
-      return { data: { node: sanitizeNode(newNode as unknown as Record<string, unknown>) } };
+        return { data: { node: sanitizeNode(newNode as unknown as Record<string, unknown>) } };
+      } catch (error) {
+        fastify.log.error({ error: (error as Error).message }, `Failed to create node: ${name}`);
+        return reply.status(500).send({
+          error: {
+            code: 'NODE_CREATION_FAILED',
+            message: (error as Error).message,
+          },
+        });
+      }
     },
   );
 
-  // GET /api/nodes — List all configured nodes
-  fastify.get(
+  // GET /api/nodes — List nodes (optionally filter by parentId)
+  fastify.get<{ Querystring: { parentId?: string } }>(
     '/api/nodes',
     {
       schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            parentId: { type: 'string' },
+          },
+        },
         response: {
           200: {
             type: 'object',
@@ -170,11 +199,21 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         },
       },
     },
-    async () => {
-      const allNodes = await fastify.db
-        .select()
-        .from(nodes)
-        .where(eq(nodes.configured, true));
+    async (request) => {
+      let allNodes;
+      if (request.query.parentId) {
+        // Return ALL children of the given parent (including discovered+unconfigured)
+        allNodes = await fastify.db
+          .select()
+          .from(nodes)
+          .where(eq(nodes.parentId, request.query.parentId));
+      } else {
+        // Default: return only configured nodes
+        allNodes = await fastify.db
+          .select()
+          .from(nodes)
+          .where(eq(nodes.configured, true));
+      }
 
       const safeNodes = allNodes.map((n) => sanitizeNode(n as unknown as Record<string, unknown>));
       return { data: { nodes: safeNodes } };
@@ -258,6 +297,452 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(400).send({
           error: {
             code: 'CONNECTION_TEST_FAILED',
+            message: (error as Error).message,
+          },
+        });
+      }
+    },
+  );
+  // GET /api/nodes/:id — Get a single node
+  fastify.get<{ Params: { id: string } }>(
+    '/api/nodes/:id',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string' } },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              data: { type: 'object', properties: { node: nodeSchema } },
+            },
+          },
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const [node] = await fastify.db.select().from(nodes).where(eq(nodes.id, id));
+
+      if (!node) {
+        return reply.status(404).send({
+          error: { code: 'NODE_NOT_FOUND', message: `Node ${id} not found` },
+        });
+      }
+
+      return { data: { node: sanitizeNode(node as unknown as Record<string, unknown>) } };
+    },
+  );
+
+  // PUT /api/nodes/:id/capabilities/proxmox — Configure Proxmox capability + run discovery
+  fastify.put<{ Params: { id: string }; Body: ConfigureProxmoxRequest }>(
+    '/api/nodes/:id/capabilities/proxmox',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string' } },
+        },
+        body: {
+          type: 'object',
+          required: ['host', 'authType'],
+          properties: {
+            host: { type: 'string', minLength: 1 },
+            port: { type: 'number' },
+            verifySsl: { type: 'boolean' },
+            authType: { type: 'string', enum: ['token', 'password'] },
+            tokenId: { type: 'string' },
+            tokenSecret: { type: 'string' },
+            username: { type: 'string' },
+            password: { type: 'string' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              data: {
+                type: 'object',
+                properties: {
+                  node: nodeSchema,
+                  discovered: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                },
+                additionalProperties: true,
+              },
+            },
+          },
+          400: errorResponseSchema,
+          404: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const body = request.body;
+
+      // Verify node exists and is physical
+      const [node] = await fastify.db.select().from(nodes).where(eq(nodes.id, id));
+      if (!node) {
+        return reply.status(404).send({
+          error: { code: 'NODE_NOT_FOUND', message: `Node ${id} not found` },
+        });
+      }
+      if (node.type !== 'physical') {
+        return reply.status(400).send({
+          error: { code: 'INVALID_NODE_TYPE', message: 'Proxmox capabilities can only be configured on physical nodes' },
+        });
+      }
+
+      // Test connection first
+      const clientConfig = {
+        host: body.host,
+        port: body.port,
+        verifySsl: body.verifySsl,
+        authType: body.authType,
+        tokenId: body.tokenId,
+        tokenSecret: body.tokenSecret,
+        username: body.username,
+        password: body.password,
+      };
+
+      let client: ProxmoxClient;
+      try {
+        client = new ProxmoxClient(clientConfig);
+        await client.get('/nodes');
+      } catch (error) {
+        return reply.status(400).send({
+          error: {
+            code: 'PROXMOX_CONNECTION_FAILED',
+            message: `Failed to connect to Proxmox: ${(error as Error).message}`,
+          },
+        });
+      }
+
+      // Build encrypted capabilities
+      let proxmoxCapability: ProxmoxCapability;
+      let updatedNode: typeof node;
+      try {
+        proxmoxCapability = {
+          host: body.host,
+          port: body.port ?? 8006,
+          verifySsl: body.verifySsl ?? false,
+          authType: body.authType,
+          ...(body.authType === 'token'
+            ? {
+                tokenId: body.tokenId,
+                tokenSecretEncrypted: body.tokenSecret ? encrypt(body.tokenSecret) : undefined,
+              }
+            : {
+                username: body.username,
+                passwordEncrypted: body.password ? encrypt(body.password) : undefined,
+              }),
+        };
+
+        const capabilities: NodeCapabilities = { ...(node.capabilities ?? {}), proxmox_api: proxmoxCapability };
+
+        // Save capabilities
+        const [result] = await fastify.db
+          .update(nodes)
+          .set({ capabilities, updatedAt: new Date() })
+          .where(eq(nodes.id, id))
+          .returning();
+        updatedNode = result!;
+      } catch (error) {
+        client!.destroy();
+        fastify.log.error({ error: (error as Error).message }, `Failed to save Proxmox capabilities for node: ${id}`);
+        return reply.status(500).send({
+          error: {
+            code: 'PROXMOX_SAVE_FAILED',
+            message: (error as Error).message,
+          },
+        });
+      }
+
+      // Run discovery
+      const connector = new ProxmoxConnector(
+        { ...updatedNode, capabilities: updatedNode.capabilities } as Node,
+        decrypt,
+      );
+
+      let discovered: Array<Record<string, unknown>> = [];
+      try {
+        const resources = await connector.listResources();
+
+        // Insert discovered nodes
+        for (const resource of resources) {
+          const nodeType = resource.type === 'qemu' ? 'vm' : 'lxc';
+          const status = resource.status === 'running' ? 'online' : 'offline';
+          const platformRef = {
+            platform: 'proxmox',
+            platformId: `${resource.node}/${resource.vmid}`,
+            node: resource.node,
+            vmid: resource.vmid,
+            type: resource.type,
+          };
+
+          const [inserted] = await fastify.db
+            .insert(nodes)
+            .values({
+              name: resource.name,
+              type: nodeType,
+              status,
+              parentId: id,
+              platformRef,
+              discovered: true,
+              configured: false,
+              confirmBeforeShutdown: false,
+            })
+            .returning();
+
+          discovered.push(sanitizeNode(inserted as unknown as Record<string, unknown>) as Record<string, unknown>);
+        }
+      } catch (error) {
+        // Discovery failed but capabilities were saved — log and continue
+        fastify.log.warn({ error: (error as Error).message }, 'Proxmox discovery failed');
+      } finally {
+        client!.destroy();
+      }
+
+      // Log the operation
+      await fastify.db.insert(operationLogs).values({
+        level: 'info',
+        source: 'nodes',
+        message: `Proxmox configured on ${node.name}: ${discovered.length} resources discovered`,
+        details: { nodeId: id, discoveredCount: discovered.length },
+      });
+
+      fastify.log.info({ nodeId: id, discoveredCount: discovered.length }, `Proxmox configured on ${node.name}`);
+
+      return {
+        data: {
+          node: sanitizeNode(updatedNode as unknown as Record<string, unknown>),
+          discovered,
+        },
+      };
+    },
+  );
+
+  // PUT /api/nodes/:id/capabilities/docker — Configure Docker capability + run discovery
+  fastify.put<{ Params: { id: string }; Body: ConfigureDockerRequest }>(
+    '/api/nodes/:id/capabilities/docker',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string' } },
+        },
+        body: {
+          type: 'object',
+          required: ['host', 'port'],
+          properties: {
+            host: { type: 'string', minLength: 1 },
+            port: { type: 'integer', minimum: 1, maximum: 65535 },
+            tlsEnabled: { type: 'boolean' },
+          },
+          additionalProperties: false,
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              data: {
+                type: 'object',
+                properties: {
+                  node: nodeSchema,
+                  discovered: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                },
+                additionalProperties: true,
+              },
+            },
+          },
+          400: errorResponseSchema,
+          404: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const body = request.body;
+
+      // Verify node exists and is not a container
+      const [node] = await fastify.db.select().from(nodes).where(eq(nodes.id, id));
+      if (!node) {
+        return reply.status(404).send({
+          error: { code: 'NODE_NOT_FOUND', message: `Node ${id} not found` },
+        });
+      }
+      if (node.type === 'container') {
+        return reply.status(400).send({
+          error: { code: 'INVALID_NODE_TYPE', message: 'Docker capabilities cannot be configured on container nodes' },
+        });
+      }
+
+      // Test connection first
+      let client: DockerClient;
+      try {
+        client = new DockerClient({ host: body.host, port: body.port, tlsEnabled: body.tlsEnabled });
+        await client.ping();
+      } catch (error) {
+        return reply.status(400).send({
+          error: {
+            code: 'DOCKER_CONNECTION_FAILED',
+            message: `Failed to connect to Docker: ${(error as Error).message}`,
+          },
+        });
+      }
+
+      // Build capabilities
+      let updatedNode: typeof node;
+      try {
+        const dockerCapability: DockerCapability = {
+          host: body.host,
+          port: body.port,
+          tlsEnabled: body.tlsEnabled,
+        };
+
+        const capabilities: NodeCapabilities = { ...(node.capabilities ?? {}), docker_api: dockerCapability };
+
+        const [result] = await fastify.db
+          .update(nodes)
+          .set({ capabilities, updatedAt: new Date() })
+          .where(eq(nodes.id, id))
+          .returning();
+        updatedNode = result!;
+      } catch (error) {
+        fastify.log.error({ error: (error as Error).message }, `Failed to save Docker capabilities for node: ${id}`);
+        return reply.status(500).send({
+          error: {
+            code: 'DOCKER_SAVE_FAILED',
+            message: (error as Error).message,
+          },
+        });
+      }
+
+      // Run discovery
+      const connector = new DockerConnector(
+        { ...updatedNode, capabilities: updatedNode.capabilities } as Node,
+      );
+
+      let discovered: Array<Record<string, unknown>> = [];
+      try {
+        const resources = await connector.listResources();
+
+        for (const resource of resources) {
+          const status = resource.state === 'running' ? 'online' : 'offline';
+          const platformRef = {
+            platform: 'docker',
+            platformId: resource.containerId,
+          };
+
+          const [inserted] = await fastify.db
+            .insert(nodes)
+            .values({
+              name: resource.name,
+              type: 'container' as const,
+              status,
+              parentId: id,
+              platformRef,
+              discovered: true,
+              configured: false,
+              confirmBeforeShutdown: false,
+            })
+            .returning();
+
+          discovered.push(sanitizeNode(inserted as unknown as Record<string, unknown>) as Record<string, unknown>);
+        }
+      } catch (error) {
+        fastify.log.warn({ error: (error as Error).message }, 'Docker discovery failed');
+      }
+
+      // Log the operation
+      await fastify.db.insert(operationLogs).values({
+        level: 'info',
+        source: 'nodes',
+        message: `Docker configured on ${node.name}: ${discovered.length} containers discovered`,
+        details: { nodeId: id, discoveredCount: discovered.length },
+      });
+
+      fastify.log.info({ nodeId: id, discoveredCount: discovered.length }, `Docker configured on ${node.name}`);
+
+      return {
+        data: {
+          node: sanitizeNode(updatedNode as unknown as Record<string, unknown>),
+          discovered,
+        },
+      };
+    },
+  );
+
+  // PATCH /api/nodes/:id — Partial update of a node
+  fastify.patch<{ Params: { id: string }; Body: { name?: string; serviceUrl?: string; configured?: boolean; ipAddress?: string } }>(
+    '/api/nodes/:id',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string' } },
+        },
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 100 },
+            serviceUrl: { type: 'string' },
+            configured: { type: 'boolean' },
+            ipAddress: { type: 'string' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              data: { type: 'object', properties: { node: nodeSchema } },
+            },
+          },
+          400: errorResponseSchema,
+          404: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const body = request.body;
+
+      const [existing] = await fastify.db.select().from(nodes).where(eq(nodes.id, id));
+      if (!existing) {
+        return reply.status(404).send({
+          error: { code: 'NODE_NOT_FOUND', message: `Node ${id} not found` },
+        });
+      }
+
+      try {
+        const updates: Record<string, unknown> = { updatedAt: new Date() };
+        if (body.name !== undefined) updates.name = body.name;
+        if (body.serviceUrl !== undefined) updates.serviceUrl = body.serviceUrl;
+        if (body.configured !== undefined) updates.configured = body.configured;
+        if (body.ipAddress !== undefined) updates.ipAddress = body.ipAddress;
+
+        const [updated] = await fastify.db
+          .update(nodes)
+          .set(updates)
+          .where(eq(nodes.id, id))
+          .returning();
+
+        return { data: { node: sanitizeNode(updated as unknown as Record<string, unknown>) } };
+      } catch (error) {
+        fastify.log.error({ error: (error as Error).message }, `Failed to update node: ${id}`);
+        return reply.status(500).send({
+          error: {
+            code: 'NODE_UPDATE_FAILED',
             message: (error as Error).message,
           },
         });
