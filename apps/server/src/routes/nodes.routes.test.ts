@@ -643,6 +643,92 @@ describe('Nodes Routes', () => {
       expect(body.error.code).toBe('NODE_NOT_FOUND');
     });
 
+    it('should update macAddress', async () => {
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/nodes',
+        payload: { name: 'MAC Node', type: 'physical', macAddress: 'AA:BB:CC:DD:EE:FF' },
+      });
+      const nodeId = JSON.parse(createRes.body).data.node.id;
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/nodes/${nodeId}`,
+        payload: { macAddress: '11:22:33:44:55:66' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.data.node.macAddress).toBe('11:22:33:44:55:66');
+    });
+
+    it('should update sshUser', async () => {
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/nodes',
+        payload: { name: 'SSH Node', type: 'physical', sshUser: 'root' },
+      });
+      const nodeId = JSON.parse(createRes.body).data.node.id;
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/nodes/${nodeId}`,
+        payload: { sshUser: 'admin' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.data.node.sshUser).toBe('admin');
+    });
+
+    it('should encrypt sshPassword when provided', async () => {
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/nodes',
+        payload: { name: 'PW Update', type: 'physical', sshUser: 'root' },
+      });
+      const nodeId = JSON.parse(createRes.body).data.node.id;
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/nodes/${nodeId}`,
+        payload: { sshPassword: 'newpassword' },
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      // Verify encrypted in DB
+      const row = sqlite.prepare('SELECT ssh_credentials_encrypted FROM nodes WHERE id = ?').get(nodeId) as { ssh_credentials_encrypted: string };
+      expect(row.ssh_credentials_encrypted).toBeDefined();
+      expect(row.ssh_credentials_encrypted).not.toBe('newpassword');
+      expect(row.ssh_credentials_encrypted.split(':')).toHaveLength(3);
+    });
+
+    it('should clear sshPassword when empty string provided', async () => {
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/nodes',
+        payload: { name: 'PW Clear', type: 'physical', sshUser: 'root', sshPassword: 'secret' },
+      });
+      const nodeId = JSON.parse(createRes.body).data.node.id;
+
+      // Verify password exists
+      const rowBefore = sqlite.prepare('SELECT ssh_credentials_encrypted FROM nodes WHERE id = ?').get(nodeId) as { ssh_credentials_encrypted: string };
+      expect(rowBefore.ssh_credentials_encrypted).toBeDefined();
+
+      // Clear it
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/nodes/${nodeId}`,
+        payload: { sshPassword: '' },
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const rowAfter = sqlite.prepare('SELECT ssh_credentials_encrypted FROM nodes WHERE id = ?').get(nodeId) as { ssh_credentials_encrypted: string | null };
+      expect(rowAfter.ssh_credentials_encrypted).toBeNull();
+    });
+
     it('should reject invalid name (too long)', async () => {
       const createRes = await app.inject({
         method: 'POST',
@@ -658,6 +744,89 @@ describe('Nodes Routes', () => {
       });
 
       expect(response.statusCode).toBe(400);
+    });
+  });
+
+  describe('DELETE /api/nodes/:id', () => {
+    it('should delete a node', async () => {
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/nodes',
+        payload: { name: 'To Delete', type: 'physical', ipAddress: '10.0.0.1' },
+      });
+      const nodeId = JSON.parse(createRes.body).data.node.id;
+
+      const response = await app.inject({
+        method: 'DELETE',
+        url: `/api/nodes/${nodeId}`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.data.success).toBe(true);
+
+      // Verify node is actually deleted
+      const getRes = await app.inject({
+        method: 'GET',
+        url: `/api/nodes/${nodeId}`,
+      });
+      expect(getRes.statusCode).toBe(404);
+    });
+
+    it('should return 404 for non-existent node', async () => {
+      const response = await app.inject({
+        method: 'DELETE',
+        url: '/api/nodes/non-existent',
+      });
+
+      expect(response.statusCode).toBe(404);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe('NODE_NOT_FOUND');
+    });
+
+    it('should cascade delete children', async () => {
+      // Create parent
+      const parentRes = await app.inject({
+        method: 'POST',
+        url: '/api/nodes',
+        payload: { name: 'Parent', type: 'physical' },
+      });
+      const parentId = JSON.parse(parentRes.body).data.node.id;
+
+      // Create child directly in DB
+      sqlite.prepare(
+        `INSERT INTO nodes (id, name, type, status, parent_id, is_pinned, confirm_before_shutdown, discovered, configured, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run('child-1', 'Child VM', 'vm', 'offline', parentId, 0, 0, 1, 1, Date.now(), Date.now());
+
+      // Delete parent
+      const response = await app.inject({
+        method: 'DELETE',
+        url: `/api/nodes/${parentId}`,
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      // Verify child is also deleted
+      const childRow = sqlite.prepare('SELECT * FROM nodes WHERE id = ?').get('child-1');
+      expect(childRow).toBeUndefined();
+    });
+
+    it('should log the deletion', async () => {
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/nodes',
+        payload: { name: 'Log Delete', type: 'physical' },
+      });
+      const nodeId = JSON.parse(createRes.body).data.node.id;
+
+      await app.inject({
+        method: 'DELETE',
+        url: `/api/nodes/${nodeId}`,
+      });
+
+      const logs = sqlite.prepare('SELECT * FROM operation_logs WHERE message LIKE ?').all('%deleted%') as Array<{ message: string }>;
+      expect(logs.length).toBeGreaterThan(0);
+      expect(logs[0]!.message).toContain('Log Delete');
     });
   });
 

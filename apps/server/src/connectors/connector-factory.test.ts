@@ -80,14 +80,14 @@ describe('ConnectorFactory', () => {
     expect(connector).toBeInstanceOf(ProxmoxConnector);
   });
 
-  it('should throw for vm without parentNode', () => {
-    expect(() => getConnector('vm')).toThrow('Proxmox connector requires parentNode and decryptFn');
+  it('should fallback to WolSshConnector for vm without parentNode', () => {
+    const connector = getConnector('vm');
+    expect(connector).toBeInstanceOf(WolSshConnector);
   });
 
-  it('should throw for lxc without decryptFn', () => {
-    expect(() => getConnector('lxc', { parentNode: makeParentNode() })).toThrow(
-      'Proxmox connector requires parentNode and decryptFn',
-    );
+  it('should fallback to WolSshConnector for lxc without decryptFn', () => {
+    const connector = getConnector('lxc', { parentNode: makeParentNode() });
+    expect(connector).toBeInstanceOf(WolSshConnector);
   });
 
   it('should return DockerConnector for container node type', () => {
@@ -101,8 +101,9 @@ describe('ConnectorFactory', () => {
     expect(connector).toBeInstanceOf(DockerConnector);
   });
 
-  it('should throw for container without parentNode', () => {
-    expect(() => getConnector('container')).toThrow('Docker connector requires parentNode');
+  it('should fallback to WolSshConnector for container without parentNode', () => {
+    const connector = getConnector('container');
+    expect(connector).toBeInstanceOf(WolSshConnector);
   });
 
   it('should return the same instance for multiple physical calls', () => {

@@ -17,16 +17,18 @@ export function getConnector(nodeType: NodeType, options?: ConnectorOptions): Pl
       return wolSshConnector;
     case 'vm':
     case 'lxc': {
-      if (!options?.parentNode || !options.decryptFn) {
-        throw new Error(`Proxmox connector requires parentNode and decryptFn`);
+      if (options?.parentNode && options.decryptFn) {
+        return new ProxmoxConnector(options.parentNode, options.decryptFn);
       }
-      return new ProxmoxConnector(options.parentNode, options.decryptFn);
+      // Fallback to SSH connector for VMs/LXCs without a Proxmox parent
+      return wolSshConnector;
     }
     case 'container': {
-      if (!options?.parentNode) {
-        throw new Error(`Docker connector requires parentNode`);
+      if (options?.parentNode) {
+        return new DockerConnector(options.parentNode);
       }
-      return new DockerConnector(options.parentNode);
+      // Fallback to SSH connector for containers without a Docker parent
+      return wolSshConnector;
     }
     default:
       throw new Error(`No connector available for node type: ${nodeType}`);

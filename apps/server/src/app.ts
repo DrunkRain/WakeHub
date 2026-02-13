@@ -12,6 +12,7 @@ import { config } from './config.js';
 import { db } from './db/index.js';
 import authRoutes from './routes/auth.js';
 import nodesRoutes from './routes/nodes.routes.js';
+import dependenciesRoutes from './routes/dependencies.routes.js';
 import { authMiddleware, cleanExpiredSessions } from './middleware/auth.middleware.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,9 @@ await app.register(authRoutes);
 
 // Register nodes routes (protected - Story 2.1)
 await app.register(nodesRoutes);
+
+// Register dependencies routes (protected - Story 3.1)
+await app.register(dependenciesRoutes, { prefix: '/api/dependencies' });
 
 // Register auth middleware on all /api routes except auth routes (Story 1.4)
 app.addHook('preHandler', async (request, reply) => {

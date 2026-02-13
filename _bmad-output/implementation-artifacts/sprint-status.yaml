@@ -39,13 +39,13 @@ development_status:
   2-2-capacite-proxmox-et-decouverte-vms-lxcs: review
   2-fix-1-error-handling-creation-noeud: review
   2-3-capacite-docker-et-decouverte-conteneurs: review
-  2-4-page-noeuds-et-vue-tabulaire: ready-for-dev
-  2-5-page-detail-noeud-modification-et-suppression: backlog
+  2-4-page-noeuds-et-vue-tabulaire: review
+  2-5-page-detail-noeud-modification-et-suppression: review
 
   # Epic 3 : Dependances Fonctionnelles
-  epic-3: backlog
-  3-1-definition-des-dependances-et-moteur-de-graphe: backlog
-  3-2-visualisation-du-graphe-de-dependances: backlog
+  epic-3: in-progress
+  3-1-definition-des-dependances-et-moteur-de-graphe: review
+  3-2-visualisation-du-graphe-de-dependances: review
 
   # Epic 4 : Dashboard, Controle d'Alimentation & Temps Reel
   epic-4: backlog

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index, foreignKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, foreignKey, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import type { NodeCapabilities, PlatformRef } from '@wakehub/shared';
 
 /**
@@ -101,4 +101,32 @@ export const nodes = sqliteTable('nodes', {
   index('idx_nodes_parent_id').on(table.parentId),
   index('idx_nodes_type').on(table.type),
   index('idx_nodes_status').on(table.status),
+]);
+
+/**
+ * Table dependency_links — Liens de dépendance fonctionnelle entre noeuds (Layer 2)
+ * Sémantique : from_node_id "dépend de" to_node_id
+ * Implémentée dans Story 3.1
+ */
+export const dependencyLinks = sqliteTable('dependency_links', {
+  id: text('id')
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  fromNodeId: text('from_node_id').notNull(),
+  toNodeId: text('to_node_id').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+}, (table) => [
+  foreignKey({
+    columns: [table.fromNodeId],
+    foreignColumns: [nodes.id],
+  }).onDelete('cascade'),
+  foreignKey({
+    columns: [table.toNodeId],
+    foreignColumns: [nodes.id],
+  }).onDelete('cascade'),
+  uniqueIndex('idx_dependency_links_unique').on(table.fromNodeId, table.toNodeId),
+  index('idx_dependency_links_from').on(table.fromNodeId),
+  index('idx_dependency_links_to').on(table.toNodeId),
 ]);

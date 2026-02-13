@@ -35,3 +35,21 @@ export type {
   NodeListResponse,
   NodeResponse,
 } from './api/nodes.js';
+
+// Dependency models
+export type {
+  DependencyLink,
+  CreateDependencyRequest,
+  DependencyNodeInfo,
+  DependencyChain,
+} from './models/dependency.js';
+
+// Dependency API types
+export type {
+  CreateDependencyResponse,
+  DependenciesQueryResponse,
+  DeleteDependencyResponse,
+  DependencyGraphNode,
+  DependencyGraphLink,
+  DependencyGraphResponse,
+} from './api/dependencies.js';

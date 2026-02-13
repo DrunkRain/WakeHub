@@ -1,6 +1,6 @@
 # Story 2.4: Page Noeuds & vue tabulaire
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -53,46 +53,46 @@ So that j'ai une vue d'ensemble de mon infrastructure.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1 : Composant StatusBadge reutilisable (AC: #1)
-  - [ ] 1.1 Creer `apps/web/src/components/shared/status-badge.tsx` — Badge Mantine avec couleur semantique selon le statut (online=green, offline=gray, starting=yellow, stopping=orange, error=red)
-  - [ ] 1.2 Props : `status: NodeStatus`, `size?: string`
-  - [ ] 1.3 Labels francais : online="Actif", offline="Eteint", starting="Demarrage", stopping="Arret", error="Erreur"
-  - [ ] 1.4 Ecrire le test unitaire
+- [x] Task 1 : Composant StatusBadge reutilisable (AC: #1)
+  - [x] 1.1 Creer `apps/web/src/components/shared/status-badge.tsx` — Badge Mantine avec couleur semantique selon le statut (online=green, offline=gray, starting=yellow, stopping=orange, error=red)
+  - [x] 1.2 Props : `status: NodeStatus`, `size?: string`
+  - [x] 1.3 Labels francais : online="Actif", offline="Eteint", starting="Demarrage", stopping="Arret", error="Erreur"
+  - [x] 1.4 Ecrire le test unitaire
 
-- [ ] Task 2 : Composant NodeTypeIcon reutilisable (AC: #1)
-  - [ ] 2.1 Creer `apps/web/src/components/shared/node-type-icon.tsx` — Icone Tabler selon le type de noeud (physical=IconServer, vm=IconDeviceDesktop, lxc=IconBox, container=IconBrandDocker)
-  - [ ] 2.2 Props : `type: NodeType`, `size?: number`
-  - [ ] 2.3 Ecrire le test unitaire
+- [x] Task 2 : Composant NodeTypeIcon reutilisable (AC: #1)
+  - [x] 2.1 Creer `apps/web/src/components/shared/node-type-icon.tsx` — Icone Tabler selon le type de noeud (physical=IconServer, vm=IconDeviceDesktop, lxc=IconBox, container=IconBrandDocker)
+  - [x] 2.2 Props : `type: NodeType`, `size?: number`
+  - [x] 2.3 Ecrire le test unitaire
 
-- [ ] Task 3 : Refactoring page Noeuds — vue tabulaire Mantine Table (AC: #1, #3, #7)
-  - [ ] 3.1 Remplacer la liste `Group/Anchor` dans `nodes-page.tsx` par un composant `Table` Mantine
-  - [ ] 3.2 Colonnes : NodeTypeIcon, nom (Anchor → Link vers `/nodes/:id`), type label (Machine/VM/LXC/Conteneur), StatusBadge, IP (ou "—"), derniere mise a jour (formatee relative)
-  - [ ] 3.3 Conserver l'etat vide existant (icone + texte + bouton "+")
-  - [ ] 3.4 Conserver le bouton "Ajouter" en haut de page + AddMachineWizard
-  - [ ] 3.5 Clic sur le nom du noeud → navigation vers `/nodes/:id`
+- [x] Task 3 : Refactoring page Noeuds — vue tabulaire Mantine Table (AC: #1, #3, #7)
+  - [x] 3.1 Remplacer la liste `Group/Anchor` dans `nodes-page.tsx` par un composant `Table` Mantine
+  - [x] 3.2 Colonnes : NodeTypeIcon, nom (Anchor → Link vers `/nodes/:id`), type label (Machine/VM/LXC/Conteneur), StatusBadge, IP (ou "—"), derniere mise a jour (formatee relative)
+  - [x] 3.3 Conserver l'etat vide existant (icone + texte + bouton "+")
+  - [x] 3.4 Conserver le bouton "Ajouter" en haut de page + AddMachineWizard
+  - [x] 3.5 Clic sur le nom du noeud → navigation vers `/nodes/:id`
 
-- [ ] Task 4 : Barre de filtres (AC: #2)
-  - [ ] 4.1 Ajouter une barre de filtres au-dessus du tableau : Select "Statut" (tous/online/offline/error) + Select "Type" (tous/physical/vm/lxc/container)
-  - [ ] 4.2 Filtrage cote client sur les donnees deja chargees (pas de nouveau endpoint API)
-  - [ ] 4.3 Bouton "Reinitialiser" pour vider les filtres
-  - [ ] 4.4 Afficher le nombre de resultats filtres ("X noeuds")
+- [x] Task 4 : Barre de filtres (AC: #2)
+  - [x] 4.1 Ajouter une barre de filtres au-dessus du tableau : Select "Statut" (tous/online/offline/error) + Select "Type" (tous/physical/vm/lxc/container)
+  - [x] 4.2 Filtrage cote client sur les donnees deja chargees (pas de nouveau endpoint API)
+  - [x] 4.3 Bouton "Reinitialiser" pour vider les filtres
+  - [x] 4.4 Afficher le nombre de resultats filtres ("X noeuds")
 
-- [ ] Task 5 : Skeleton loaders (AC: #6)
-  - [ ] 5.1 Remplacer le texte "Chargement..." par des Skeleton Mantine en forme de lignes de tableau (5 lignes skeleton)
-  - [ ] 5.2 Chaque ligne skeleton a la meme structure que le tableau (colonnes alignees)
+- [x] Task 5 : Skeleton loaders (AC: #6)
+  - [x] 5.1 Remplacer le texte "Chargement..." par des Skeleton Mantine en forme de lignes de tableau (5 lignes skeleton)
+  - [x] 5.2 Chaque ligne skeleton a la meme structure que le tableau (colonnes alignees)
 
-- [ ] Task 6 : Responsive design (AC: #4, #5)
-  - [ ] 6.1 Utiliser `useMediaQuery` de Mantine ou les props responsive pour masquer les colonnes secondaires (IP, derniere mise a jour) sous 992px
-  - [ ] 6.2 Sous 768px, afficher une vue liste simplifiee (Stack de Group : icone + nom + badge statut)
-  - [ ] 6.3 Les filtres restent accessibles sur toutes les tailles d'ecran
+- [x] Task 6 : Responsive design (AC: #4, #5)
+  - [x] 6.1 Utiliser `useMediaQuery` de Mantine ou les props responsive pour masquer les colonnes secondaires (IP, derniere mise a jour) sous 992px
+  - [x] 6.2 Sous 768px, afficher une vue liste simplifiee (Stack de Group : icone + nom + badge statut)
+  - [x] 6.3 Les filtres restent accessibles sur toutes les tailles d'ecran
 
-- [ ] Task 7 : Tests frontend (AC: tous)
-  - [ ] 7.1 Tester le rendering du tableau avec des noeuds (colonnes visibles, donnees affichees)
-  - [ ] 7.2 Tester l'etat vide (message + bouton)
-  - [ ] 7.3 Tester les filtres (filtrage par statut, par type, reinitialisation)
-  - [ ] 7.4 Tester le skeleton loading
-  - [ ] 7.5 Tester que le lien du nom pointe vers `/nodes/:id`
-  - [ ] 7.6 Verifier que tous les tests existants passent (224 total)
+- [x] Task 7 : Tests frontend (AC: tous)
+  - [x] 7.1 Tester le rendering du tableau avec des noeuds (colonnes visibles, donnees affichees)
+  - [x] 7.2 Tester l'etat vide (message + bouton)
+  - [x] 7.3 Tester les filtres (filtrage par statut, par type, reinitialisation)
+  - [x] 7.4 Tester le skeleton loading
+  - [x] 7.5 Tester que le lien du nom pointe vers `/nodes/:id`
+  - [x] 7.6 Verifier que tous les tests existants passent (247 total — 171 server + 76 web)
 
 ## Dev Notes
 
@@ -438,10 +438,39 @@ La branche de travail est `nouvel-axe`. L'Epic 2 est en cours avec les stories 2
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.6 (claude-opus-4-6)
 
 ### Debug Log References
 
+- Tests Select collision : `getByText('Machine')` trouvait des doublons table + dropdown → fix avec `within(table)` scoping
+- Tests `useMediaQuery` : jsdom retourne false pour toutes les media queries → fix avec mock `window.matchMedia` simulant desktop
+
 ### Completion Notes List
 
+- Task 1 : StatusBadge cree avec 5 couleurs semantiques et labels francais. 7 tests unitaires passent.
+- Task 2 : NodeTypeIcon cree avec 4 icones Tabler. 5 tests unitaires passent.
+- Task 3 : Page Noeuds refactoree — liste Group/Anchor remplacee par Table Mantine avec colonnes icone, nom (lien), type, statut (badge), IP, date relative.
+- Task 4 : Barre de filtres ajoutee — Select statut + Select type + bouton Reinitialiser + compteur noeuds filtres. Filtrage cote client via useMemo.
+- Task 5 : Skeleton loaders — 5 lignes skeleton dans un Table avec colonnes alignees pendant le chargement.
+- Task 6 : Responsive — colonnes IP et date masquees sous 992px (useMediaQuery). Vue liste simplifiee (Group icone+nom+badge) sous 768px.
+- Task 7 : 16 tests NodesPage couvrant table, etat vide, filtres, skeleton, navigation, wizard. Total projet : 247 tests (171 server + 76 web), 0 regression.
+
 ### File List
+
+**Nouveaux fichiers :**
+- `apps/web/src/components/shared/status-badge.tsx`
+- `apps/web/src/components/shared/status-badge.test.tsx`
+- `apps/web/src/components/shared/node-type-icon.tsx`
+- `apps/web/src/components/shared/node-type-icon.test.tsx`
+
+**Fichiers modifies :**
+- `apps/web/src/features/nodes/nodes-page.tsx`
+- `apps/web/src/features/nodes/nodes-page.test.tsx`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/2-4-page-noeuds-et-vue-tabulaire.md`
+
+## Change Log
+
+| Date | Changement |
+|---|---|
+| 2026-02-13 | Implementation complete Story 2.4 — Page Noeuds refactoree en vue tabulaire avec filtres, skeleton loaders, responsive et composants reutilisables StatusBadge/NodeTypeIcon. 23 nouveaux tests ajoutes (247 total). |

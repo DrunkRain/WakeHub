@@ -214,6 +214,9 @@ export interface UpdateNodePayload {
   serviceUrl?: string;
   configured?: boolean;
   ipAddress?: string;
+  macAddress?: string;
+  sshUser?: string;
+  sshPassword?: string;
 }
 
 export function useUpdateNode() {
@@ -235,6 +238,27 @@ export function useUpdateNode() {
     onSuccess: (_data, { nodeId }) => {
       queryClient.invalidateQueries({ queryKey: ['nodes'] });
       queryClient.invalidateQueries({ queryKey: ['nodes', nodeId] });
+    },
+  });
+}
+
+// DELETE /api/nodes/:id
+export function useDeleteNode() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ data: { success: boolean } }, ErrorResponse, string>({
+    mutationFn: async (nodeId) => {
+      const response = await apiFetch(`${API_BASE}/${nodeId}`, {
+        method: 'DELETE',
+      });
+      const json = await response.json();
+      if (!response.ok) {
+        throw json as ErrorResponse;
+      }
+      return json as { data: { success: boolean } };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['nodes'] });
     },
   });
 }

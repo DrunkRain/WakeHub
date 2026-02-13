@@ -265,7 +265,25 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       try {
-        const connector = getConnector(node.type as 'physical' | 'vm' | 'lxc' | 'container');
+        // For VMs/LXCs/containers, load the parent node to get the platform connector
+        let parentNode: Node | undefined;
+        if (node.parentId && (node.type === 'vm' || node.type === 'lxc' || node.type === 'container')) {
+          const [parent] = await fastify.db.select().from(nodes).where(eq(nodes.id, node.parentId));
+          if (parent) {
+            parentNode = {
+              ...parent,
+              capabilities: parent.capabilities as Node['capabilities'],
+              platformRef: parent.platformRef as Node['platformRef'],
+              createdAt: parent.createdAt,
+              updatedAt: parent.updatedAt,
+            };
+          }
+        }
+
+        const connector = getConnector(node.type as 'physical' | 'vm' | 'lxc' | 'container', {
+          parentNode,
+          decryptFn: decrypt,
+        });
 
         // Decrypt credentials before passing to connector
         const decryptedPassword = node.sshCredentialsEncrypted
@@ -681,8 +699,60 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
+  // DELETE /api/nodes/:id — Delete a node (cascade deletes children via FK)
+  fastify.delete<{ Params: { id: string } }>(
+    '/api/nodes/:id',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string' } },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              data: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean' },
+                },
+              },
+            },
+          },
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+
+      const [node] = await fastify.db.select().from(nodes).where(eq(nodes.id, id));
+      if (!node) {
+        return reply.status(404).send({
+          error: { code: 'NODE_NOT_FOUND', message: `Node ${id} not found` },
+        });
+      }
+
+      await fastify.db.delete(nodes).where(eq(nodes.id, id));
+
+      // Log the operation
+      await fastify.db.insert(operationLogs).values({
+        level: 'info',
+        source: 'nodes',
+        message: `Node deleted: ${node.name} (${node.type})`,
+        details: { nodeId: id, type: node.type },
+      });
+
+      fastify.log.info({ nodeId: id }, `Node deleted: ${node.name}`);
+
+      return { data: { success: true } };
+    },
+  );
+
   // PATCH /api/nodes/:id — Partial update of a node
-  fastify.patch<{ Params: { id: string }; Body: { name?: string; serviceUrl?: string; configured?: boolean; ipAddress?: string } }>(
+  fastify.patch<{ Params: { id: string }; Body: { name?: string; serviceUrl?: string; configured?: boolean; ipAddress?: string; macAddress?: string; sshUser?: string; sshPassword?: string } }>(
     '/api/nodes/:id',
     {
       schema: {
@@ -698,6 +768,9 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
             serviceUrl: { type: 'string' },
             configured: { type: 'boolean' },
             ipAddress: { type: 'string' },
+            macAddress: { type: 'string' },
+            sshUser: { type: 'string' },
+            sshPassword: { type: 'string' },
           },
         },
         response: {
@@ -730,6 +803,11 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         if (body.serviceUrl !== undefined) updates.serviceUrl = body.serviceUrl;
         if (body.configured !== undefined) updates.configured = body.configured;
         if (body.ipAddress !== undefined) updates.ipAddress = body.ipAddress;
+        if (body.macAddress !== undefined) updates.macAddress = body.macAddress;
+        if (body.sshUser !== undefined) updates.sshUser = body.sshUser;
+        if (body.sshPassword !== undefined) {
+          updates.sshCredentialsEncrypted = body.sshPassword === '' ? null : encrypt(body.sshPassword);
+        }
 
         const [updated] = await fastify.db
           .update(nodes)

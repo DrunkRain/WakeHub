@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router';
 import { Group, UnstyledButton } from '@mantine/core';
-import { IconHome, IconServer } from '@tabler/icons-react';
+import { IconHome, IconServer, IconTopologyRing3 } from '@tabler/icons-react';
 import classes from './navigation.module.css';
 
 interface NavItemProps {
@@ -31,6 +31,7 @@ export function Navigation() {
     <Group gap="xs">
       <NavItem to="/" icon={IconHome} label="Accueil" />
       <NavItem to="/nodes" icon={IconServer} label="Noeuds" />
+      <NavItem to="/graph" icon={IconTopologyRing3} label="Graphe" />
     </Group>
   );
 }
