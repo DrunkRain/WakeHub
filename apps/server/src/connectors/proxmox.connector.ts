@@ -1,4 +1,4 @@
-import type { Node, NodeStatus, DiscoveredResource } from '@wakehub/shared';
+import type { Node, NodeStatus, NodeStats, DiscoveredResource } from '@wakehub/shared';
 import type { PlatformConnector } from './connector.interface.js';
 import { ProxmoxClient } from './proxmox-client.js';
 import { PlatformError } from '../utils/platform-error.js';
@@ -57,10 +57,10 @@ export class ProxmoxConnector implements PlatformConnector {
     const { pveNode, vmid, vmType } = this.extractPlatformRef(node);
     const client = this.createClient();
     try {
-      await client.post(`/nodes/${pveNode}/${vmType}/${vmid}/status/stop`);
+      await client.post(`/nodes/${pveNode}/${vmType}/${vmid}/status/shutdown`);
     } catch (error) {
       throw new PlatformError(
-        'PROXMOX_STOP_FAILED',
+        'PROXMOX_SHUTDOWN_FAILED',
         `Impossible d'arreter ${vmType} ${vmid}`,
         PLATFORM,
         { node: pveNode, vmid, type: vmType, cause: (error as Error).message },
@@ -78,6 +78,24 @@ export class ProxmoxConnector implements PlatformConnector {
       return data.status === 'running' ? 'online' : 'offline';
     } catch {
       return 'error';
+    } finally {
+      client.destroy();
+    }
+  }
+
+  async getStats(node: Node): Promise<NodeStats | null> {
+    const { pveNode, vmid, vmType } = this.extractPlatformRef(node);
+    const client = this.createClient();
+    try {
+      const data = await client.get<{ cpu: number; maxcpu: number; mem: number; maxmem: number }>(
+        `/nodes/${pveNode}/${vmType}/${vmid}/status/current`,
+      );
+      return {
+        cpuUsage: data.cpu,
+        ramUsage: data.maxmem > 0 ? data.mem / data.maxmem : 0,
+      };
+    } catch {
+      return null;
     } finally {
       client.destroy();
     }

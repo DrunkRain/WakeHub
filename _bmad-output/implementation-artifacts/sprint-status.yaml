@@ -56,11 +56,19 @@ development_status:
   4-5-servicedetailpanel-et-arret-manuel: done
 
   # Epic 5 : Arret Automatique sur Inactivite
-  epic-5: backlog
-  5-1-moteur-de-surveillance-dinactivite: backlog
-  5-2-protection-des-dependances-et-configuration-ui: backlog
+  epic-5: done
+  5-1-moteur-de-surveillance-dinactivite: done
+  5-2-protection-des-dependances-et-configuration-ui: done
+  5-3-implementation-des-vrais-criteres-de-surveillance: done
+  5-4-suppression-critere-httpaccess: done
+  5-5-seuils-cpu-ram-configurables: done
 
   # Epic 6 : Journalisation & Diagnostic
   epic-6: backlog
   6-1-enrichissement-du-logging-et-persistance-complete: backlog
   6-2-page-logs-et-interface-de-diagnostic: backlog
+
+  # Epic 7 : Monitoring Reseau Avance
+  epic-7: backlog
+  7-1-monitoring-reseau-docker-delta-trafic: backlog
+  7-2-monitoring-reseau-proxmox-rrddata: backlog

@@ -6,6 +6,7 @@ const { mockRequest } = vi.hoisted(() => ({
 
 vi.mock('undici', () => ({
   request: mockRequest,
+  Agent: class { close() {} },
 }));
 
 import { DockerClient } from './docker-client.js';

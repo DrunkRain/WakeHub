@@ -76,5 +76,23 @@ export type {
   SSECascadeProgressEvent,
   SSECascadeCompleteEvent,
   SSECascadeErrorEvent,
+  SSEAutoShutdownEvent,
   SSEEvent,
 } from './models/sse-event.js';
+
+// Node stats
+export type { NodeStats } from './models/node-stats.js';
+
+// Inactivity rule models
+export type {
+  InactivityRule,
+  MonitoringCriteria,
+} from './models/inactivity-rule.js';
+
+// Inactivity rule API types
+export type {
+  InactivityRuleResponse,
+  InactivityRuleListResponse,
+  CreateInactivityRuleRequest,
+  UpdateInactivityRuleRequest,
+} from './api/inactivity-rules.js';

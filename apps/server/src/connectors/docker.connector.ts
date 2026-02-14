@@ -1,4 +1,4 @@
-import type { Node, NodeStatus, DockerDiscoveredResource } from '@wakehub/shared';
+import type { Node, NodeStatus, NodeStats, DockerDiscoveredResource } from '@wakehub/shared';
 import type { PlatformConnector } from './connector.interface.js';
 import { DockerClient } from './docker-client.js';
 import { PlatformError } from '../utils/platform-error.js';
@@ -17,6 +17,23 @@ interface DockerContainerListItem {
 interface DockerContainerInspect {
   State: {
     Running: boolean;
+  };
+}
+
+interface DockerStatsResponse {
+  cpu_stats: {
+    cpu_usage: { total_usage: number };
+    system_cpu_usage: number;
+    online_cpus: number;
+  };
+  precpu_stats: {
+    cpu_usage: { total_usage: number };
+    system_cpu_usage: number;
+  };
+  memory_stats: {
+    usage: number;
+    limit: number;
+    stats?: { inactive_file?: number };
   };
 }
 
@@ -78,6 +95,27 @@ export class DockerConnector implements PlatformConnector {
       return data.State.Running ? 'online' : 'offline';
     } catch {
       return 'error';
+    }
+  }
+
+  async getStats(node: Node): Promise<NodeStats | null> {
+    const containerId = this.extractContainerId(node);
+    const client = this.createClient();
+    try {
+      const data = await client.get<DockerStatsResponse>(`/containers/${containerId}/stats?stream=false`);
+
+      // Docker CPU usage formula: (delta container / delta system) * number of host CPUs
+      const cpuDelta = data.cpu_stats.cpu_usage.total_usage - data.precpu_stats.cpu_usage.total_usage;
+      const systemDelta = data.cpu_stats.system_cpu_usage - data.precpu_stats.system_cpu_usage;
+      const onlineCpus = data.cpu_stats.online_cpus || 1;
+      const cpuUsage = systemDelta > 0 ? (cpuDelta / systemDelta) * onlineCpus : 0;
+
+      const cacheUsage = data.memory_stats.stats?.inactive_file ?? 0;
+      const ramUsage = data.memory_stats.limit > 0 ? Math.max(0, data.memory_stats.usage - cacheUsage) / data.memory_stats.limit : 0;
+
+      return { cpuUsage, ramUsage };
+    } catch {
+      return null;
     }
   }
 

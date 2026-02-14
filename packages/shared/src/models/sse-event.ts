@@ -1,6 +1,6 @@
 import type { NodeStatus } from './node.js';
 
-export type SSEEventType = 'status-change' | 'cascade-progress' | 'cascade-complete' | 'cascade-error';
+export type SSEEventType = 'status-change' | 'cascade-progress' | 'cascade-complete' | 'cascade-error' | 'auto-shutdown';
 
 export interface SSEStatusChangeEvent {
   nodeId: string;
@@ -34,8 +34,18 @@ export interface SSECascadeErrorEvent {
   };
 }
 
+export interface SSEAutoShutdownEvent {
+  nodeId: string;
+  nodeName: string;
+  ruleId: string;
+  reason: 'inactivity';
+  inactiveMinutes: number;
+  timestamp: string;
+}
+
 export type SSEEvent =
   | { event: 'status-change'; data: SSEStatusChangeEvent }
   | { event: 'cascade-progress'; data: SSECascadeProgressEvent }
   | { event: 'cascade-complete'; data: SSECascadeCompleteEvent }
-  | { event: 'cascade-error'; data: SSECascadeErrorEvent };
+  | { event: 'cascade-error'; data: SSECascadeErrorEvent }
+  | { event: 'auto-shutdown'; data: SSEAutoShutdownEvent };

@@ -48,6 +48,7 @@ import { CascadeProgress } from '../dashboard/cascade-progress';
 import { ConfigureProxmoxModal } from './configure-proxmox-modal';
 import { ConfigureDockerModal } from './configure-docker-modal';
 import { ConfigureDiscoveredModal } from './configure-discovered-modal';
+import { InactivityRulesSection } from './inactivity-rules-section';
 import type { NodeType, NodeStatus } from '@wakehub/shared';
 
 const typeLabels: Record<string, string> = {
@@ -607,6 +608,9 @@ export function NodeDetailPage() {
             )}
           </Stack>
         </Card>
+
+        {/* Section Règles d'inactivité */}
+        <InactivityRulesSection nodeId={id!} nodeType={node.type as NodeType} />
 
         {/* Section Contrôle d'alimentation */}
         <Card withBorder>

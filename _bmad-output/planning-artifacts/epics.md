@@ -59,12 +59,15 @@ This document provides the complete epic and story breakdown for WakeHub, decomp
 - FR33: L'utilisateur peut relancer une cascade apres un echec
 
 **Surveillance d'Inactivite & Arret Automatique**
-- FR34: Le systeme surveille l'activite d'un noeud selon des criteres configurables (connexions reseau, activite CPU/RAM, dernier acces)
+- FR34: Le systeme surveille l'activite d'un noeud selon des criteres configurables (connexions reseau, activite CPU/RAM, dernier acces, accessibilite HTTP/HTTPS du service)
 - FR35: Le systeme declenche un arret automatique apres une periode d'inactivite configurable
 - FR36: L'administrateur peut definir un delai d'inactivite par defaut (30 minutes)
 - FR37: L'administrateur peut personnaliser le delai d'inactivite par noeud
 - FR38: Le systeme respecte les dependances partagees et l'arbre d'hebergement lors d'un arret automatique
 - FR39: Le systeme annule un arret automatique si un dependant actif est detecte
+- FR54: L'administrateur peut configurer les seuils CPU et RAM de detection d'inactivite par regle (defaut 50%)
+- FR55: Le systeme detecte l'inactivite reseau des conteneurs Docker via le delta de trafic (rx_bytes/tx_bytes)
+- FR56: Le systeme detecte l'inactivite reseau des VMs et LXCs via les metriques Proxmox rrddata (netin/netout)
 
 **Dashboard & Visibilite**
 - FR40: Tout noeud (machine physique, VM, LXC, conteneur) est epinglable sur le dashboard
@@ -230,8 +233,11 @@ This document provides the complete epic and story breakdown for WakeHub, decomp
 - FR47: Epic 4 — Option "Confirmer avant extinction" configurable par noeud
 - FR48: Epic 2 — Configuration acces Docker API (direct ou tunnel SSH)
 - FR49: Epic 2 — Definition URL d'acces service (bouton "Ouvrir")
+- FR54: Epic 5 — Seuils CPU/RAM configurables par regle d'inactivite
+- FR55: Epic 7 — Monitoring reseau Docker (delta rx_bytes/tx_bytes)
+- FR56: Epic 7 — Monitoring reseau Proxmox (netin/netout via rrddata)
 
-**Couverture : 53/53 FRs mappes.**
+**Couverture : 56/56 FRs mappes.**
 
 ## Epic List
 
@@ -261,7 +267,7 @@ L'utilisateur compose son dashboard en epinglant les noeuds de son choix, voit l
 
 ### Epic 5 : Arret Automatique sur Inactivite
 Le systeme surveille l'activite des noeuds selon des criteres configurables et les eteint automatiquement apres le delai configure, tout en protegeant les dependances partagees et en respectant l'arbre d'hebergement.
-**FRs couverts :** FR34, FR35, FR36, FR37, FR38, FR39
+**FRs couverts :** FR34, FR35, FR36, FR37, FR38, FR39, FR54
 **Depend de :** Epic 4
 
 ### Epic 6 : Journalisation & Diagnostic
@@ -270,6 +276,12 @@ L'utilisateur consulte l'historique complet des operations via une page de logs 
 **Exigences supplementaires :** ARCH-09, UX-11
 **Note :** L'infrastructure de logging (pino + table en base) est posee dans l'Epic 1. Chaque epic enrichit les logs. L'Epic 6 construit la page Logs et complete la couverture.
 **Depend de :** Epic 1 (infrastructure logging), Epic 4+ (donnees a afficher)
+
+### Epic 7 : Monitoring Reseau Avance
+Le systeme detecte l'inactivite reseau des conteneurs Docker et des VMs/LXCs via des compteurs de trafic (delta bytes), offrant un signal de monitoring fiable pour les types de noeuds qui ne supportent pas les verifications SSH directes.
+**FRs couverts :** FR55, FR56
+**Note :** Cet epic introduit un changement de paradigme : le monitoring passe de stateless a stateful (cache de compteurs reseau par noeud entre les ticks). Le premier tick apres demarrage n'a pas de precedent → safe fallback (actif).
+**Depend de :** Epic 5
 
 ---
 
@@ -1015,7 +1027,7 @@ So that je peux comprendre son etat et agir depuis un seul endroit.
 
 ## Epic 5 : Arret Automatique sur Inactivite
 
-Le systeme surveille l'activite des noeuds selon des criteres configurables et les eteint automatiquement apres le delai configure, tout en protegeant les dependances partagees et en respectant l'arbre d'hebergement.
+Le systeme surveille l'activite des noeuds selon des criteres configurables et les eteint automatiquement apres le delai configure, tout en protegeant les dependances partagees et en respectant l'arbre d'hebergement. Les seuils de detection CPU/RAM sont configurables par regle pour s'adapter a chaque type de noeud.
 
 ### Story 5.1 : Moteur de surveillance d'inactivite
 
@@ -1085,6 +1097,74 @@ So that mes services partages ne sont jamais eteints par erreur.
 **Given** je desactive la surveillance pour un noeud
 **When** le toggle est desactive
 **Then** le moniteur ignore ce noeud et il reste actif indefiniment
+
+---
+
+### Story 5.3 : Implementation des vrais criteres de surveillance
+
+As a administrateur,
+I want que WakeHub verifie reellement l'activite CPU/RAM, les connexions reseau et l'accessibilite HTTP/HTTPS de mes services,
+So that l'arret automatique se base sur des donnees concretes et pas seulement sur un check TCP port 22.
+
+**Acceptance Criteria:**
+
+**Given** un noeud actif a le critere `cpuRamActivity` active
+**When** le moniteur verifie l'activite
+**Then** il execute une commande SSH sur le noeud pour lire la charge CPU et l'utilisation RAM
+**And** si CPU > seuil OU RAM > seuil → le noeud est considere actif
+
+**Given** un noeud actif a le critere `networkConnections` active
+**When** le moniteur verifie l'activite
+**Then** il execute une commande SSH sur le noeud pour compter les connexions reseau etablies (TCP)
+**And** si des connexions sont presentes (hors monitoring) → le noeud est considere actif
+
+**Given** un noeud actif a le critere `httpAccess` active et une URL de service configuree
+**When** le moniteur verifie l'activite
+**Then** il envoie une requete HTTP/HTTPS HEAD vers l'URL du service
+**And** si le service repond (2xx ou 3xx) → le noeud est considere actif
+
+**Given** le type MonitoringCriteria est etendu
+**When** le nouveau champ `httpAccess` est ajoute
+**Then** l'UI affiche une 4eme checkbox "Acces HTTP/HTTPS"
+**And** les labels "(bientot)" sont retires des criteres desormais fonctionnels
+
+**Given** un noeud n'a pas de credentials SSH
+**When** les criteres `cpuRamActivity` ou `networkConnections` sont actives
+**Then** le check retourne "actif" (safe fallback) et un warning est logue
+
+---
+
+### Story 5.5 : Seuils CPU/RAM configurables par regle d'inactivite
+
+As a administrateur,
+I want configurer les seuils CPU et RAM de detection d'inactivite par regle,
+So that je peux adapter la sensibilite du monitoring a chaque type de noeud.
+
+**Acceptance Criteria:**
+
+**Given** l'interface `MonitoringCriteria` existe dans `packages/shared`
+**When** cette story est implementee
+**Then** deux champs optionnels sont ajoutes : `cpuThreshold?: number` (defaut 0.5) et `ramThreshold?: number` (defaut 0.5)
+
+**Given** les constantes `CPU_LOAD_THRESHOLD` et `RAM_USAGE_THRESHOLD` sont hardcodees dans `inactivity-monitor.ts`
+**When** cette story est implementee
+**Then** le moteur de monitoring lit les seuils depuis la regle d'inactivite du noeud
+**And** les constantes hardcodees sont supprimees
+**And** si les seuils ne sont pas definis dans la regle, les valeurs par defaut (0.5) sont utilisees
+
+**Given** la section "Regles d'inactivite" existe dans la page detail noeud
+**When** le critere `cpuRamActivity` est active
+**Then** deux champs numeriques (ou sliders) apparaissent : "Seuil CPU (%)" et "Seuil RAM (%)"
+**And** les valeurs sont validees entre 0.01 et 1.0
+**And** les valeurs par defaut sont pre-remplies (0.5 = 50%)
+
+**Given** une regle existante n'a pas de seuils definis (migration)
+**When** le moniteur verifie l'activite
+**Then** les valeurs par defaut (0.5) sont utilisees sans erreur
+
+**Given** les tests existants referent aux seuils
+**When** cette story est implementee
+**Then** les tests sont adaptes pour utiliser les seuils depuis la regle au lieu des constantes
 
 ---
 
@@ -1163,3 +1243,74 @@ So that je peux diagnostiquer les problemes et verifier le bon fonctionnement de
 **Given** la navigation est mise a jour
 **When** je consulte le menu
 **Then** un lien "Logs" est present dans la navigation principale
+
+---
+
+## Epic 7 : Monitoring Reseau Avance
+
+Le systeme detecte l'inactivite reseau des conteneurs Docker et des VMs/LXCs via des compteurs de trafic (delta bytes), offrant un signal de monitoring fiable pour les types de noeuds qui ne supportent pas les verifications SSH directes.
+
+### Story 7.1 : Monitoring reseau Docker (delta trafic)
+
+As a administrateur,
+I want que WakeHub detecte l'inactivite reseau de mes conteneurs Docker via le delta de trafic,
+So that les conteneurs idle mais avec un process en fond sont correctement detectes comme inactifs.
+
+**Acceptance Criteria:**
+
+**Given** un nouveau critere `networkTraffic` est ajoute a `MonitoringCriteria`
+**When** cette story est implementee
+**Then** `MonitoringCriteria` contient `networkTraffic: boolean`
+**And** un seuil optionnel `networkTrafficThreshold?: number` (bytes, defaut a definir) est disponible dans la regle
+
+**Given** le Docker connector a acces aux stats API
+**When** `getStats()` est appele sur un conteneur
+**Then** il retourne egalement `rxBytes` et `txBytes` depuis `networks.eth0` des Docker stats
+
+**Given** le moniteur d'inactivite execute un tick
+**When** le critere `networkTraffic` est actif pour un conteneur Docker
+**Then** il compare les bytes actuels (rx + tx) avec les bytes du tick precedent stockes dans un cache en memoire (`Map<nodeId, { rxBytes, txBytes }>`)
+**And** si le delta > seuil → le noeud est considere actif
+**And** si le delta <= seuil → le check retourne inactif
+
+**Given** c'est le premier tick pour un noeud (pas de precedent en cache)
+**When** le critere est evalue
+**Then** le check retourne actif (safe fallback)
+**And** les bytes actuels sont stockes pour le prochain tick
+
+**Given** un noeud n'est plus online ou n'a plus de regle active
+**When** le cycle de nettoyage des compteurs s'execute
+**Then** l'entree du cache reseau est supprimee
+
+**Given** l'UI de la section "Regles d'inactivite" est affichee
+**When** le noeud est de type `container`
+**Then** une checkbox "Trafic reseau" est disponible dans les criteres
+
+---
+
+### Story 7.2 : Monitoring reseau Proxmox (rrddata)
+
+As a administrateur,
+I want que WakeHub detecte l'inactivite reseau de mes VMs et LXCs via les metriques Proxmox,
+So that les VMs/LXCs ont une visibilite reseau fiable sans necessiter de SSH dans la VM.
+
+**Acceptance Criteria:**
+
+**Given** le Proxmox connector existe
+**When** cette story est implementee
+**Then** `ProxmoxConnector.getStats()` est etendu pour inclure `rxBytes` et `txBytes` depuis l'endpoint `GET /api2/json/nodes/{node}/qemu|lxc/{vmid}/rrddata?timeframe=hour`
+**And** les valeurs `netin` et `netout` de la derniere entree de la serie temporelle sont utilisees
+
+**Given** le critere `networkTraffic` est actif pour une VM ou LXC
+**When** le moniteur verifie l'activite
+**Then** il utilise la meme logique de delta que Story 7.1 (cache de bytes + comparaison)
+**And** la source des bytes est `ProxmoxConnector.getStats()` au lieu de Docker stats
+
+**Given** l'API Proxmox rrddata n'est pas disponible ou retourne une erreur
+**When** le critere est evalue
+**Then** le check retourne actif (safe fallback)
+**And** un warning est logue
+
+**Given** l'UI de la section "Regles d'inactivite" est affichee
+**When** le noeud est de type `vm` ou `lxc`
+**Then** la checkbox "Trafic reseau" est disponible dans les criteres

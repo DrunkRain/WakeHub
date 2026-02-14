@@ -190,6 +190,141 @@ describe('DockerConnector', () => {
     });
   });
 
+  describe('getStats', () => {
+    it('should return CPU and RAM usage from Docker stats', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 200_000_000 },
+          system_cpu_usage: 2_000_000_000,
+          online_cpus: 4,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: {
+          usage: 536_870_912,
+          limit: 1_073_741_824,
+          stats: { inactive_file: 0 },
+        },
+      });
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      // cpuDelta = 100M, systemDelta = 1000M, ratio = 0.1, * 4 online_cpus = 0.4
+      // RAM: (536870912 - 0) / 1073741824 = 0.5
+      expect(stats).toEqual({ cpuUsage: 0.4, ramUsage: 0.5 });
+      expect(mockGet).toHaveBeenCalledWith('/containers/abc123def456/stats?stream=false');
+    });
+
+    it('should return null on API error', async () => {
+      mockGet.mockRejectedValueOnce(new Error('connection error'));
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      expect(stats).toBeNull();
+    });
+
+    it('should subtract page cache (inactive_file) from RAM usage', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 200_000_000 },
+          system_cpu_usage: 2_000_000_000,
+          online_cpus: 2,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: {
+          usage: 536_870_912, // ~512MB
+          limit: 1_073_741_824, // ~1GB
+          stats: { inactive_file: 268_435_456 }, // ~256MB cache
+        },
+      });
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      // RAM: (536870912 - 268435456) / 1073741824 = 0.25
+      expect(stats).toEqual({ cpuUsage: expect.any(Number), ramUsage: 0.25 });
+    });
+
+    it('should handle missing stats or inactive_file gracefully (no cache subtraction)', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 200_000_000 },
+          system_cpu_usage: 2_000_000_000,
+          online_cpus: 2,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: {
+          usage: 536_870_912,
+          limit: 1_073_741_824,
+          // No stats field at all
+        },
+      });
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      // RAM: (536870912 - 0) / 1073741824 = 0.5 (no cache to subtract)
+      expect(stats).toEqual({ cpuUsage: expect.any(Number), ramUsage: 0.5 });
+    });
+
+    it('should fallback to 1 when online_cpus is missing or 0', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 200_000_000 },
+          system_cpu_usage: 2_000_000_000,
+          online_cpus: 0, // should fallback to 1
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: {
+          usage: 536_870_912,
+          limit: 1_073_741_824,
+        },
+      });
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      // cpuDelta = 100M, systemDelta = 1000M, ratio = 0.1, * 1 (fallback) = 0.1
+      expect(stats).toEqual({ cpuUsage: 0.1, ramUsage: 0.5 });
+    });
+
+    it('should handle zero system delta gracefully', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+          online_cpus: 2,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: {
+          usage: 256_000_000,
+          limit: 1_024_000_000,
+        },
+      });
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      expect(stats).toEqual({ cpuUsage: 0, ramUsage: 0.25 });
+    });
+  });
+
   describe('listResources', () => {
     it('should return mapped DockerDiscoveredResource array', async () => {
       mockGet.mockResolvedValueOnce([

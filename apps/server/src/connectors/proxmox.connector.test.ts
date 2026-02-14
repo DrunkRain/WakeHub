@@ -187,19 +187,19 @@ describe('ProxmoxConnector', () => {
 
       await connector.stop(node);
 
-      expect(mockPost).toHaveBeenCalledWith('/nodes/pve1/qemu/100/status/stop');
+      expect(mockPost).toHaveBeenCalledWith('/nodes/pve1/qemu/100/status/shutdown');
     });
 
-    it('should POST stop for a LXC', async () => {
+    it('should POST shutdown for a LXC', async () => {
       mockPost.mockResolvedValueOnce('UPID:pve1:00005678');
       const node = makeLxcNode();
 
       await connector.stop(node);
 
-      expect(mockPost).toHaveBeenCalledWith('/nodes/pve1/lxc/200/status/stop');
+      expect(mockPost).toHaveBeenCalledWith('/nodes/pve1/lxc/200/status/shutdown');
     });
 
-    it('should throw PlatformError when stop fails', async () => {
+    it('should throw PlatformError when shutdown fails', async () => {
       mockPost.mockRejectedValueOnce(new Error('Proxmox POST failed (500)'));
       const node = makeVmNode();
 
@@ -208,7 +208,7 @@ describe('ProxmoxConnector', () => {
         expect.unreachable('should have thrown');
       } catch (error) {
         expect(error).toBeInstanceOf(PlatformError);
-        expect(error).toMatchObject({ code: 'PROXMOX_STOP_FAILED', platform: 'proxmox' });
+        expect(error).toMatchObject({ code: 'PROXMOX_SHUTDOWN_FAILED', platform: 'proxmox' });
       }
     });
   });
@@ -259,6 +259,48 @@ describe('ProxmoxConnector', () => {
       const status = await connector.getStatus(node);
 
       expect(status).toBe('error');
+    });
+  });
+
+  describe('getStats', () => {
+    it('should return CPU and RAM usage from Proxmox status/current', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.35, maxcpu: 4, mem: 2147483648, maxmem: 4294967296 });
+      const node = makeVmNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.35, ramUsage: 0.5 });
+      expect(mockGet).toHaveBeenCalledWith('/nodes/pve1/qemu/100/status/current');
+      expect(mockDestroy).toHaveBeenCalled();
+    });
+
+    it('should use lxc path for LXC node', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.1, maxcpu: 2, mem: 1073741824, maxmem: 2147483648 });
+      const node = makeLxcNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.1, ramUsage: 0.5 });
+      expect(mockGet).toHaveBeenCalledWith('/nodes/pve1/lxc/200/status/current');
+    });
+
+    it('should return null on API error', async () => {
+      mockGet.mockRejectedValueOnce(new Error('API Error'));
+      const node = makeVmNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toBeNull();
+      expect(mockDestroy).toHaveBeenCalled();
+    });
+
+    it('should handle zero maxmem gracefully', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.5, maxcpu: 2, mem: 0, maxmem: 0 });
+      const node = makeVmNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.5, ramUsage: 0 });
     });
   });
 

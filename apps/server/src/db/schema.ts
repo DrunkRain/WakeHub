@@ -1,5 +1,5 @@
 import { sqliteTable, text, integer, index, foreignKey, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import type { NodeCapabilities, PlatformRef } from '@wakehub/shared';
+import type { NodeCapabilities, PlatformRef, MonitoringCriteria } from '@wakehub/shared';
 
 /**
  * Table users — Gestion des comptes utilisateurs
@@ -159,4 +159,34 @@ export const cascades = sqliteTable('cascades', {
     foreignColumns: [nodes.id],
   }).onDelete('cascade'),
   index('idx_cascades_node_id').on(table.nodeId),
+]);
+
+/**
+ * Table inactivity_rules — Règles de surveillance d'inactivité par nœud
+ * Implémentée dans Story 5.1
+ */
+export const inactivityRules = sqliteTable('inactivity_rules', {
+  id: text('id')
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  nodeId: text('node_id').notNull(),
+  timeoutMinutes: integer('timeout_minutes').notNull().default(30),
+  monitoringCriteria: text('monitoring_criteria', { mode: 'json' })
+    .$type<MonitoringCriteria>()
+    .notNull()
+    .$defaultFn(() => ({ lastAccess: true, networkConnections: false, cpuRamActivity: false })),
+  isEnabled: integer('is_enabled', { mode: 'boolean' }).notNull().default(true),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+}, (table) => [
+  foreignKey({
+    columns: [table.nodeId],
+    foreignColumns: [nodes.id],
+  }).onDelete('cascade'),
+  index('idx_inactivity_rules_node_id').on(table.nodeId),
+  index('idx_inactivity_rules_enabled').on(table.isEnabled),
 ]);

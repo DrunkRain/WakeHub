@@ -16,8 +16,11 @@ import dependenciesRoutes from './routes/dependencies.routes.js';
 import cascadesRoutes from './routes/cascades.routes.js';
 import eventsRoutes from './routes/events.routes.js';
 import statsRoutes from './routes/stats.routes.js';
+import inactivityRulesRoutes from './routes/inactivity-rules.routes.js';
 import { SSEManager } from './sse/sse-manager.js';
 import { authMiddleware, cleanExpiredSessions } from './middleware/auth.middleware.js';
+import { startInactivityMonitor, stopInactivityMonitor } from './services/inactivity-monitor.js';
+import { decrypt } from './utils/crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -55,6 +58,9 @@ await app.register(eventsRoutes, { prefix: '/api' });
 
 // Register stats routes (protected - Story 4.3)
 await app.register(statsRoutes, { prefix: '/api/stats' });
+
+// Register inactivity rules routes (protected - Story 5.1)
+await app.register(inactivityRulesRoutes, { prefix: '/api/inactivity-rules' });
 
 // Register auth middleware on all /api routes except auth routes (Story 1.4)
 app.addHook('preHandler', async (request, reply) => {
@@ -112,6 +118,14 @@ if (config.nodeEnv === 'production') {
 
 // Clean expired sessions on startup
 await cleanExpiredSessions();
+
+// Start inactivity monitor (Story 5.1)
+startInactivityMonitor(db, sseManager, decrypt);
+
+// Stop inactivity monitor on server close
+app.addHook('onClose', async () => {
+  stopInactivityMonitor();
+});
 
 try {
   await app.listen({ port: config.port, host: '0.0.0.0' });
