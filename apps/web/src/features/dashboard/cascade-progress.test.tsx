@@ -1,123 +1,67 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { theme } from '../../theme/theme';
-import { CascadeProgress } from './cascade-progress';
+import { CascadeProgress, type CascadeProgressProps } from './cascade-progress';
 
-function renderWithProviders(ui: React.ReactElement) {
+function renderProgress(props: Partial<CascadeProgressProps> = {}) {
+  const defaultProps: CascadeProgressProps = {
+    step: 2,
+    totalSteps: 5,
+    status: 'in_progress',
+    ...props,
+  };
+
   return render(
-    <MantineProvider theme={theme} defaultColorScheme="dark">
-      {ui}
+    <MantineProvider>
+      <CascadeProgress {...defaultProps} />
     </MantineProvider>,
   );
 }
 
 describe('CascadeProgress', () => {
-  it('renders progress bar with correct percentage', () => {
-    renderWithProviders(
-      <CascadeProgress currentStep={1} totalSteps={3} status="in_progress" />,
-    );
-
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toHaveAttribute('aria-valuenow', '33');
-    expect(bar).toHaveAttribute('aria-valuemin', '0');
-    expect(bar).toHaveAttribute('aria-valuemax', '100');
+  it('should render a progress bar with correct percentage', () => {
+    renderProgress({ step: 2, totalSteps: 5 });
+    // Mantine Progress renders role="progressbar" on the inner section with aria-valuetext
+    const progressbars = screen.getAllByRole('progressbar');
+    const section = progressbars.find((el) => el.getAttribute('aria-valuetext'));
+    expect(section).toHaveAttribute('aria-valuenow', '40');
   });
 
-  it('shows aria-label with step info and dependency name', () => {
-    renderWithProviders(
-      <CascadeProgress
-        currentStep={2}
-        totalSteps={4}
-        currentDependencyName="NAS Server"
-        status="in_progress"
-      />,
-    );
-
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toHaveAttribute(
-      'aria-label',
-      'Démarrage en cours — étape 2 sur 4 : NAS Server',
-    );
+  it('should render current dependency name', () => {
+    renderProgress({ currentNodeName: 'NAS-Storage', status: 'in_progress' });
+    expect(screen.getByText('NAS-Storage')).toBeInTheDocument();
   });
 
-  it('shows aria-label without dependency name when not provided', () => {
-    renderWithProviders(
-      <CascadeProgress currentStep={1} totalSteps={3} status="in_progress" />,
-    );
-
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toHaveAttribute(
-      'aria-label',
-      'Démarrage en cours — étape 1 sur 3',
-    );
+  it('should render current dependency name with NodeTypeIcon when type is provided', () => {
+    renderProgress({ currentNodeName: 'NAS-Storage', currentNodeType: 'physical', status: 'in_progress' });
+    expect(screen.getByText('NAS-Storage')).toBeInTheDocument();
   });
 
-  it('shows current dependency name when in progress', () => {
-    renderWithProviders(
-      <CascadeProgress
-        currentStep={1}
-        totalSteps={3}
-        currentDependencyName="Proxmox Node"
-        status="in_progress"
-      />,
-    );
-
-    expect(screen.getByText('Proxmox Node')).toBeInTheDocument();
+  it('should render bar at 100% when completed', () => {
+    renderProgress({ step: 5, totalSteps: 5, status: 'completed' });
+    const progressbars = screen.getAllByRole('progressbar');
+    const section = progressbars.find((el) => el.getAttribute('aria-valuetext'));
+    expect(section).toHaveAttribute('aria-valuenow', '100');
+    expect(section).toHaveAttribute('aria-valuetext', '100%');
   });
 
-  it('has aria-live polite on dependency zone', () => {
-    const { container } = renderWithProviders(
-      <CascadeProgress
-        currentStep={1}
-        totalSteps={3}
-        currentDependencyName="Proxmox Node"
-        status="in_progress"
-      />,
-    );
-
-    const liveRegion = container.querySelector('[aria-live="polite"]');
-    expect(liveRegion).toBeInTheDocument();
+  it('should render error message when failed', () => {
+    renderProgress({ step: 2, totalSteps: 5, status: 'failed', errorNodeName: 'VM-Media' });
+    expect(screen.getByText('Échec : VM-Media')).toBeInTheDocument();
   });
 
-  it('shows 100% when completed', () => {
-    renderWithProviders(
-      <CascadeProgress currentStep={2} totalSteps={3} status="completed" />,
-    );
-
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toHaveAttribute('aria-valuenow', '100');
+  it('should have role="progressbar" with aria-valuenow, aria-valuemin, aria-valuemax', () => {
+    renderProgress({ step: 3, totalSteps: 10 });
+    const progressbars = screen.getAllByRole('progressbar');
+    const section = progressbars.find((el) => el.getAttribute('aria-valuetext'));
+    expect(section).toHaveAttribute('aria-valuenow', '30');
+    expect(section).toHaveAttribute('aria-valuemin', '0');
+    expect(section).toHaveAttribute('aria-valuemax', '100');
   });
 
-  it('shows "Terminé" when completed', () => {
-    renderWithProviders(
-      <CascadeProgress currentStep={3} totalSteps={3} status="completed" />,
-    );
-
-    expect(screen.getByText('Terminé')).toBeInTheDocument();
-  });
-
-  it('stops at current step when failed', () => {
-    renderWithProviders(
-      <CascadeProgress
-        currentStep={2}
-        totalSteps={3}
-        currentDependencyName="Docker Host"
-        status="failed"
-      />,
-    );
-
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toHaveAttribute('aria-valuenow', '67');
-    expect(screen.getByText('Docker Host')).toBeInTheDocument();
-  });
-
-  it('handles zero totalSteps without error', () => {
-    renderWithProviders(
-      <CascadeProgress currentStep={0} totalSteps={0} status="in_progress" />,
-    );
-
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toHaveAttribute('aria-valuenow', '0');
+  it('should have aria-live="polite" on the dependency zone', () => {
+    renderProgress({ currentNodeName: 'NAS-Storage', status: 'in_progress' });
+    const liveRegion = screen.getByText('NAS-Storage').closest('[aria-live]');
+    expect(liveRegion).toHaveAttribute('aria-live', 'polite');
   });
 });

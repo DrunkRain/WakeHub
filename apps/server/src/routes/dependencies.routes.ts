@@ -1,31 +1,10 @@
 import type { FastifyPluginAsync, FastifyError } from 'fastify';
-import { eq, and, or } from 'drizzle-orm';
-import { dependencyLinks, services, operationLogs } from '../db/schema.js';
-import {
-  isSharedDependency,
-  validateLink,
-  getUpstreamChain,
-  getDownstreamDependents,
-} from '../services/dependency-graph.js';
+import { eq } from 'drizzle-orm';
+import { dependencyLinks, nodes, operationLogs } from '../db/schema.js';
+import { validateLink } from '../services/dependency-graph.js';
+import type { DependencyNodeInfo } from '@wakehub/shared';
 
-interface CreateBody {
-  parentType: 'service';
-  parentId: string;
-  childType: 'service';
-  childId: string;
-  isShared?: boolean;
-}
-
-interface PatchBody {
-  isShared: boolean;
-}
-
-interface NodeQuery {
-  nodeType: 'service';
-  nodeId: string;
-}
-
-const errorSchema = {
+const errorResponseSchema = {
   type: 'object' as const,
   properties: {
     error: {
@@ -33,184 +12,144 @@ const errorSchema = {
       properties: {
         code: { type: 'string' as const },
         message: { type: 'string' as const },
+        details: { type: 'object' as const, additionalProperties: true },
       },
     },
   },
 };
 
-const dependencyLinkSchema = {
+const dependencySchema = {
   type: 'object' as const,
   properties: {
     id: { type: 'string' as const },
-    parentType: { type: 'string' as const },
-    parentId: { type: 'string' as const },
-    childType: { type: 'string' as const },
-    childId: { type: 'string' as const },
-    isShared: { type: 'boolean' as const },
-    isStructural: { type: 'boolean' as const },
+    fromNodeId: { type: 'string' as const },
+    toNodeId: { type: 'string' as const },
     createdAt: { type: 'string' as const },
   },
 };
 
-const chainNodeSchema = {
+const dependencyNodeInfoSchema = {
   type: 'object' as const,
   properties: {
-    nodeType: { type: 'string' as const },
+    linkId: { type: 'string' as const },
     nodeId: { type: 'string' as const },
     name: { type: 'string' as const },
+    type: { type: 'string' as const },
     status: { type: 'string' as const },
   },
-};
-
-function formatLink(link: typeof dependencyLinks.$inferSelect) {
-  return {
-    id: link.id,
-    parentType: link.parentType,
-    parentId: link.parentId,
-    childType: link.childType,
-    childId: link.childId,
-    isShared: link.isShared,
-    isStructural: link.isStructural,
-    createdAt: link.createdAt.toISOString(),
-  };
-}
-
-const ERROR_MESSAGES: Record<string, { status: number; message: string }> = {
-  SELF_REFERENCE: { status: 400, message: 'Un noeud ne peut pas dépendre de lui-même' },
-  NODE_NOT_FOUND: { status: 404, message: 'Le parent ou l\'enfant n\'existe pas' },
-  DUPLICATE_LINK: { status: 409, message: 'Ce lien de dépendance existe déjà' },
-  CYCLE_DETECTED: { status: 409, message: 'Ce lien créerait un cycle de dépendances' },
 };
 
 const dependenciesRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.setErrorHandler((error: FastifyError, _request, reply) => {
     if ('validation' in error && error.validation) {
       return reply.status(400).send({
-        error: { code: 'VALIDATION_ERROR', message: error.message },
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: error.message,
+          details: error.validation,
+        },
       });
     }
     throw error;
   });
 
   // POST /api/dependencies — Create a dependency link
-  fastify.post<{ Body: CreateBody }>(
-    '/api/dependencies',
+  fastify.post<{ Body: { fromNodeId: string; toNodeId: string } }>(
+    '/',
     {
       schema: {
         body: {
           type: 'object',
-          required: ['parentType', 'parentId', 'childType', 'childId'],
+          required: ['fromNodeId', 'toNodeId'],
           properties: {
-            parentType: { type: 'string', enum: ['service'] },
-            parentId: { type: 'string', minLength: 1 },
-            childType: { type: 'string', enum: ['service'] },
-            childId: { type: 'string', minLength: 1 },
-            isShared: { type: 'boolean' },
+            fromNodeId: { type: 'string', minLength: 1 },
+            toNodeId: { type: 'string', minLength: 1 },
           },
         },
         response: {
-          200: { type: 'object', properties: { data: dependencyLinkSchema } },
-          400: errorSchema,
-          401: errorSchema,
-          404: errorSchema,
-          409: errorSchema,
+          200: {
+            type: 'object',
+            properties: {
+              data: {
+                type: 'object',
+                properties: {
+                  dependency: dependencySchema,
+                },
+              },
+            },
+          },
+          400: errorResponseSchema,
+          404: errorResponseSchema,
+          500: errorResponseSchema,
         },
       },
     },
     async (request, reply) => {
-      const { parentType, parentId, childType, childId, isShared } = request.body;
-      const validation = validateLink(fastify.db, parentType, parentId, childType, childId);
+      const { fromNodeId, toNodeId } = request.body;
 
-      if (!validation.valid) {
-        const errInfo = ERROR_MESSAGES[validation.error!] ?? { status: 400, message: 'Erreur de validation' };
+      try {
+        // Verify both nodes exist
+        const [fromNode] = await fastify.db.select({ id: nodes.id }).from(nodes).where(eq(nodes.id, fromNodeId));
+        if (!fromNode) {
+          return reply.status(404).send({
+            error: { code: 'NODE_NOT_FOUND', message: 'Noeud introuvable' },
+          });
+        }
 
-        fastify.db.insert(operationLogs).values({
-          timestamp: new Date(), level: 'warn', source: 'dependencies',
-          message: `Dependency creation rejected: ${validation.error}`,
-          reason: validation.error!,
-          details: { parentType, parentId, childType, childId },
-        }).run();
+        const [toNode] = await fastify.db.select({ id: nodes.id }).from(nodes).where(eq(nodes.id, toNodeId));
+        if (!toNode) {
+          return reply.status(404).send({
+            error: { code: 'NODE_NOT_FOUND', message: 'Noeud introuvable' },
+          });
+        }
 
-        return reply.status(errInfo.status).send({
-          error: { code: validation.error!, message: errInfo.message },
+        // Validate the link (self-link, duplicate, cycle)
+        const validation = await validateLink(fromNodeId, toNodeId, fastify.db);
+        if (!validation.valid) {
+          return reply.status(400).send({
+            error: { code: validation.code!, message: validation.message! },
+          });
+        }
+
+        // Insert the dependency link
+        const [dependency] = await fastify.db
+          .insert(dependencyLinks)
+          .values({ fromNodeId, toNodeId })
+          .returning();
+
+        // Log the operation
+        fastify.log.info({ dependencyId: dependency!.id }, 'Dependency link created');
+        await fastify.db.insert(operationLogs).values({
+          level: 'info',
+          source: 'dependencies',
+          message: `Dependency link created: ${fromNodeId} → ${toNodeId}`,
+          details: { dependencyId: dependency!.id, fromNodeId, toNodeId },
+          nodeId: fromNodeId,
+          eventType: 'decision',
+        });
+
+        return { data: { dependency: dependency! } };
+      } catch (error) {
+        fastify.log.error({ error: (error as Error).message }, 'Failed to create dependency link');
+        return reply.status(500).send({
+          error: {
+            code: 'DEPENDENCY_CREATION_FAILED',
+            message: 'Impossible de créer le lien de dépendance',
+          },
         });
       }
-
-      const now = new Date();
-      const id = crypto.randomUUID();
-
-      fastify.db.insert(dependencyLinks).values({
-        id, parentType, parentId, childType, childId,
-        isShared: isShared ?? false,
-        createdAt: now,
-      }).run();
-
-      const link = {
-        id, parentType, parentId, childType, childId,
-        isShared: isShared ?? false,
-        isStructural: false,
-        createdAt: now.toISOString(),
-      };
-
-      fastify.db.insert(operationLogs).values({
-        timestamp: now, level: 'info', source: 'dependencies',
-        message: `Dependency created: ${parentType}:${parentId} → ${childType}:${childId}`,
-        reason: 'dependency-created',
-        details: { linkId: id, parentType, parentId, childType, childId },
-      }).run();
-
-      fastify.log.info({ linkId: id }, 'Dependency link created');
-      return { data: link };
     },
   );
 
-  // GET /api/dependencies
-  fastify.get<{ Querystring: Partial<NodeQuery> }>(
-    '/api/dependencies',
+  // GET /api/dependencies?nodeId=X — Get upstream and downstream dependencies
+  fastify.get<{ Querystring: { nodeId: string } }>(
+    '/',
     {
       schema: {
         querystring: {
           type: 'object',
+          required: ['nodeId'],
           properties: {
-            nodeType: { type: 'string', enum: ['service'] },
-            nodeId: { type: 'string' },
-          },
-        },
-        response: {
-          200: { type: 'object', properties: { data: { type: 'array', items: dependencyLinkSchema } } },
-          401: errorSchema,
-        },
-      },
-    },
-    async (request) => {
-      const { nodeType, nodeId } = request.query;
-
-      let links;
-      if (nodeType && nodeId) {
-        links = fastify.db.select().from(dependencyLinks)
-          .where(or(
-            and(eq(dependencyLinks.parentType, nodeType), eq(dependencyLinks.parentId, nodeId)),
-            and(eq(dependencyLinks.childType, nodeType), eq(dependencyLinks.childId, nodeId)),
-          ))
-          .all();
-      } else {
-        links = fastify.db.select().from(dependencyLinks).all();
-      }
-
-      return { data: links.map(formatLink) };
-    },
-  );
-
-  // GET /api/dependencies/chain
-  fastify.get<{ Querystring: NodeQuery }>(
-    '/api/dependencies/chain',
-    {
-      schema: {
-        querystring: {
-          type: 'object',
-          required: ['nodeType', 'nodeId'],
-          properties: {
-            nodeType: { type: 'string', enum: ['service'] },
             nodeId: { type: 'string', minLength: 1 },
           },
         },
@@ -221,128 +160,88 @@ const dependenciesRoutes: FastifyPluginAsync = async (fastify) => {
               data: {
                 type: 'object',
                 properties: {
-                  upstream: { type: 'array', items: chainNodeSchema },
-                  downstream: { type: 'array', items: chainNodeSchema },
+                  upstream: { type: 'array', items: dependencyNodeInfoSchema },
+                  downstream: { type: 'array', items: dependencyNodeInfoSchema },
                 },
+                additionalProperties: true,
               },
             },
           },
-          401: errorSchema,
-        },
-      },
-    },
-    async (request) => {
-      const { nodeType, nodeId } = request.query;
-      const upstream = getUpstreamChain(fastify.db, nodeType, nodeId);
-      const downstream = getDownstreamDependents(fastify.db, nodeType, nodeId);
-      return { data: { upstream, downstream } };
-    },
-  );
-
-  // DELETE /api/dependencies/:id — Protected against structural links
-  fastify.delete<{ Params: { id: string } }>(
-    '/api/dependencies/:id',
-    {
-      schema: {
-        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
-        response: {
-          200: { type: 'object', properties: { data: { type: 'object', properties: { success: { type: 'boolean' as const } } } } },
-          401: errorSchema,
-          403: errorSchema,
-          404: errorSchema,
+          404: errorResponseSchema,
+          500: errorResponseSchema,
         },
       },
     },
     async (request, reply) => {
-      const { id } = request.params;
-      const [existing] = fastify.db.select().from(dependencyLinks).where(eq(dependencyLinks.id, id)).all();
+      const { nodeId } = request.query;
 
-      if (!existing) {
-        return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Lien de dépendance non trouvé' } });
+      try {
+        // Verify node exists
+        const [node] = await fastify.db.select({ id: nodes.id }).from(nodes).where(eq(nodes.id, nodeId));
+        if (!node) {
+          return reply.status(404).send({
+            error: { code: 'NODE_NOT_FOUND', message: 'Noeud introuvable' },
+          });
+        }
+
+        // Get direct upstream (what this node depends on) with link info
+        const upstreamLinks = await fastify.db
+          .select({
+            linkId: dependencyLinks.id,
+            nodeId: dependencyLinks.toNodeId,
+            name: nodes.name,
+            type: nodes.type,
+            status: nodes.status,
+          })
+          .from(dependencyLinks)
+          .innerJoin(nodes, eq(dependencyLinks.toNodeId, nodes.id))
+          .where(eq(dependencyLinks.fromNodeId, nodeId));
+
+        // Get direct downstream (nodes that depend on this one) with link info
+        const downstreamLinks = await fastify.db
+          .select({
+            linkId: dependencyLinks.id,
+            nodeId: dependencyLinks.fromNodeId,
+            name: nodes.name,
+            type: nodes.type,
+            status: nodes.status,
+          })
+          .from(dependencyLinks)
+          .innerJoin(nodes, eq(dependencyLinks.fromNodeId, nodes.id))
+          .where(eq(dependencyLinks.toNodeId, nodeId));
+
+        const upstream: DependencyNodeInfo[] = upstreamLinks.map((l) => ({
+          linkId: l.linkId,
+          nodeId: l.nodeId,
+          name: l.name,
+          type: l.type,
+          status: l.status,
+        }));
+
+        const downstream: DependencyNodeInfo[] = downstreamLinks.map((l) => ({
+          linkId: l.linkId,
+          nodeId: l.nodeId,
+          name: l.name,
+          type: l.type,
+          status: l.status,
+        }));
+
+        return { data: { upstream, downstream } };
+      } catch (error) {
+        fastify.log.error({ error: (error as Error).message }, 'Failed to get dependencies');
+        return reply.status(500).send({
+          error: {
+            code: 'DEPENDENCY_QUERY_FAILED',
+            message: 'Impossible de récupérer les dépendances',
+          },
+        });
       }
-
-      if (existing.isStructural) {
-        return reply.status(403).send({ error: { code: 'STRUCTURAL_LINK', message: 'Les liens structurels ne peuvent pas être supprimés' } });
-      }
-
-      fastify.db.delete(dependencyLinks).where(eq(dependencyLinks.id, id)).run();
-
-      fastify.db.insert(operationLogs).values({
-        timestamp: new Date(), level: 'info', source: 'dependencies',
-        message: `Dependency deleted: ${existing.parentType}:${existing.parentId} → ${existing.childType}:${existing.childId}`,
-        reason: 'dependency-deleted',
-        details: { linkId: id },
-      }).run();
-
-      fastify.log.info({ linkId: id }, 'Dependency link deleted');
-      return { data: { success: true } };
     },
   );
 
-  // PATCH /api/dependencies/:id
-  fastify.patch<{ Params: { id: string }; Body: PatchBody }>(
-    '/api/dependencies/:id',
-    {
-      schema: {
-        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
-        body: { type: 'object', required: ['isShared'], properties: { isShared: { type: 'boolean' } } },
-        response: {
-          200: { type: 'object', properties: { data: dependencyLinkSchema } },
-          401: errorSchema,
-          404: errorSchema,
-        },
-      },
-    },
-    async (request, reply) => {
-      const { id } = request.params;
-      const { isShared } = request.body;
-
-      const [existing] = fastify.db.select().from(dependencyLinks).where(eq(dependencyLinks.id, id)).all();
-
-      if (!existing) {
-        return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Lien de dépendance non trouvé' } });
-      }
-
-      fastify.db.update(dependencyLinks).set({ isShared }).where(eq(dependencyLinks.id, id)).run();
-
-      fastify.db.insert(operationLogs).values({
-        timestamp: new Date(), level: 'info', source: 'dependencies',
-        message: `Dependency updated: isShared=${isShared}`,
-        reason: 'dependency-updated',
-        details: { linkId: id, isShared },
-      }).run();
-
-      fastify.log.info({ linkId: id, isShared }, 'Dependency link updated');
-      return { data: formatLink({ ...existing, isShared }) };
-    },
-  );
-
-  // GET /api/dependencies/graph
-  const graphNodeSchema = {
-    type: 'object' as const,
-    properties: {
-      id: { type: 'string' as const },
-      name: { type: 'string' as const },
-      nodeType: { type: 'string' as const },
-      subType: { type: 'string' as const },
-      status: { type: 'string' as const },
-      isShared: { type: 'boolean' as const },
-    },
-  };
-
-  const graphEdgeSchema = {
-    type: 'object' as const,
-    properties: {
-      id: { type: 'string' as const },
-      source: { type: 'string' as const },
-      target: { type: 'string' as const },
-      isShared: { type: 'boolean' as const },
-      isStructural: { type: 'boolean' as const },
-    },
-  };
-
+  // GET /api/dependencies/graph — Full dependency graph
   fastify.get(
-    '/api/dependencies/graph',
+    '/graph',
     {
       schema: {
         response: {
@@ -352,55 +251,154 @@ const dependenciesRoutes: FastifyPluginAsync = async (fastify) => {
               data: {
                 type: 'object',
                 properties: {
-                  nodes: { type: 'array', items: graphNodeSchema },
-                  edges: { type: 'array', items: graphEdgeSchema },
+                  nodes: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string' },
+                        name: { type: 'string' },
+                        type: { type: 'string' },
+                        status: { type: 'string' },
+                      },
+                    },
+                  },
+                  links: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string' },
+                        fromNodeId: { type: 'string' },
+                        toNodeId: { type: 'string' },
+                        linkType: { type: 'string' },
+                      },
+                    },
+                  },
                 },
               },
             },
           },
-          401: errorSchema,
+          500: errorResponseSchema,
         },
       },
     },
-    async () => {
-      const allServices = fastify.db.select().from(services).all();
-      const allLinks = fastify.db.select().from(dependencyLinks).all();
+    async (_request, reply) => {
+      try {
+        const allNodesRaw = await fastify.db
+          .select({
+            id: nodes.id,
+            name: nodes.name,
+            type: nodes.type,
+            status: nodes.status,
+            parentId: nodes.parentId,
+          })
+          .from(nodes);
 
-      // Build set of node IDs that appear in dependency links
-      const linkedNodeIds = new Set<string>();
-      for (const link of allLinks) {
-        linkedNodeIds.add(`${link.parentType}:${link.parentId}`);
-        linkedNodeIds.add(`${link.childType}:${link.childId}`);
-      }
+        const functionalLinks = await fastify.db
+          .select({
+            id: dependencyLinks.id,
+            fromNodeId: dependencyLinks.fromNodeId,
+            toNodeId: dependencyLinks.toNodeId,
+          })
+          .from(dependencyLinks);
 
-      // Build nodes array — only include nodes that participate in dependencies
-      const nodes: Array<{
-        id: string; name: string; nodeType: string; subType: string; status: string; isShared: boolean;
-      }> = [];
+        // Build structural links from parentId relationships
+        const structuralLinks = allNodesRaw
+          .filter((n) => n.parentId)
+          .map((n) => ({
+            id: `structural-${n.id}`,
+            fromNodeId: n.id,
+            toNodeId: n.parentId!,
+            linkType: 'structural' as const,
+          }));
 
-      for (const s of allServices) {
-        const key = `service:${s.id}`;
-        if (!linkedNodeIds.has(key)) continue;
-        nodes.push({
-          id: key,
-          name: s.name,
-          nodeType: 'service',
-          subType: s.type,
-          status: s.status,
-          isShared: isSharedDependency(fastify.db, 'service', s.id),
+        const allLinks = [
+          ...functionalLinks.map((l) => ({ ...l, linkType: 'functional' as const })),
+          ...structuralLinks,
+        ];
+
+        const allNodes = allNodesRaw.map(({ parentId: _parentId, ...rest }) => rest);
+
+        return { data: { nodes: allNodes, links: allLinks } };
+      } catch (error) {
+        fastify.log.error({ error: (error as Error).message }, 'Failed to get dependency graph');
+        return reply.status(500).send({
+          error: {
+            code: 'DEPENDENCY_GRAPH_FAILED',
+            message: 'Impossible de récupérer le graphe de dépendances',
+          },
         });
       }
+    },
+  );
 
-      // Build edges array
-      const edges = allLinks.map((link) => ({
-        id: link.id,
-        source: `${link.parentType}:${link.parentId}`,
-        target: `${link.childType}:${link.childId}`,
-        isShared: link.isShared,
-        isStructural: link.isStructural,
-      }));
+  // DELETE /api/dependencies/:id — Delete a dependency link
+  fastify.delete<{ Params: { id: string } }>(
+    '/:id',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              data: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean' },
+                },
+              },
+            },
+          },
+          404: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
 
-      return { data: { nodes, edges } };
+      try {
+        const [link] = await fastify.db
+          .select()
+          .from(dependencyLinks)
+          .where(eq(dependencyLinks.id, id));
+
+        if (!link) {
+          return reply.status(404).send({
+            error: { code: 'DEPENDENCY_NOT_FOUND', message: 'Lien de dépendance introuvable' },
+          });
+        }
+
+        await fastify.db.delete(dependencyLinks).where(eq(dependencyLinks.id, id));
+
+        fastify.log.info({ dependencyId: id }, 'Dependency link deleted');
+        await fastify.db.insert(operationLogs).values({
+          level: 'info',
+          source: 'dependencies',
+          message: `Dependency link deleted: ${link.fromNodeId} → ${link.toNodeId}`,
+          details: { dependencyId: id, fromNodeId: link.fromNodeId, toNodeId: link.toNodeId },
+          nodeId: link.fromNodeId,
+          eventType: 'decision',
+        });
+
+        return { data: { success: true } };
+      } catch (error) {
+        fastify.log.error({ error: (error as Error).message }, 'Failed to delete dependency link');
+        return reply.status(500).send({
+          error: {
+            code: 'DEPENDENCY_DELETE_FAILED',
+            message: 'Impossible de supprimer le lien de dépendance',
+          },
+        });
+      }
     },
   );
 };

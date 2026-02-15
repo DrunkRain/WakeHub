@@ -1,14 +1,9 @@
-export interface DiscoveredResource {
-  name: string;
-  type: 'vm' | 'container';
-  platformRef: Record<string, unknown>;
-  status: 'running' | 'stopped' | 'paused' | 'unknown' | 'error';
-}
+import type { Node, NodeStatus, NodeStats } from '@wakehub/shared';
 
 export interface PlatformConnector {
-  testConnection(): Promise<{ success: boolean; message: string }>;
-  start(): Promise<void>;
-  stop(): Promise<void>;
-  getStatus(): Promise<'online' | 'offline' | 'unknown' | 'error'>;
-  listResources?(): Promise<DiscoveredResource[]>;
+  testConnection(node: Node): Promise<boolean>;
+  start(node: Node): Promise<void>;
+  stop(node: Node): Promise<void>;
+  getStatus(node: Node): Promise<NodeStatus>;
+  getStats?(node: Node): Promise<NodeStats | null>;
 }

@@ -1,388 +1,248 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { userEvent } from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
+import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { theme } from '../../theme/theme';
-import { ServiceDetailPanel } from './service-detail-panel';
-import type { Service, CascadeRecord, DependencyChainNode } from '@wakehub/shared';
+import { ServiceDetailPanel, type ServiceDetailPanelProps, type ServiceDetailNode } from './service-detail-panel';
+import { useCascadeStore } from '../../stores/cascade.store';
+import React from 'react';
 
-// Mock API hooks
-vi.mock('../../api/services.api', () => ({
-  useServices: vi.fn(() => ({ data: null })),
-}));
-
-vi.mock('../../api/cascades.api', () => ({
-  useActiveCascades: vi.fn(() => ({ data: null })),
-  useCascadeHistory: vi.fn(() => ({ data: null })),
-}));
-
+const mockUseDependencies = vi.hoisted(() => vi.fn());
 vi.mock('../../api/dependencies.api', () => ({
-  useDependencyChain: vi.fn(() => ({ data: null })),
+  useDependencies: mockUseDependencies,
 }));
 
-import { useServices } from '../../api/services.api';
-import { useActiveCascades, useCascadeHistory } from '../../api/cascades.api';
-import { useDependencyChain } from '../../api/dependencies.api';
-
-const baseService: Service = {
-  id: 'r1',
-  name: 'Jellyfin',
-  type: 'vm',
-  ipAddress: null,
-  macAddress: null,
-  sshUser: null,
-  apiUrl: null,
-  serviceUrl: 'http://jellyfin:8096',
-  status: 'running',
-  platformRef: { node: 'pve1', vmid: 100 },
-  inactivityTimeout: null,
-  parentId: 'm1',
-  pinnedToDashboard: true,
-  createdAt: '2026-01-01T00:00:00Z',
-  updatedAt: '2026-01-01T00:00:00Z',
-};
-
-function mockServices(services: Service[]) {
-  vi.mocked(useServices).mockReturnValue({
-    data: { data: services },
-  } as ReturnType<typeof useServices>);
-}
-
-function mockActiveCascades(cascades: CascadeRecord[]) {
-  vi.mocked(useActiveCascades).mockReturnValue({
-    data: { data: cascades },
-  } as ReturnType<typeof useActiveCascades>);
-}
-
-function mockCascadeHistory(cascades: CascadeRecord[]) {
-  vi.mocked(useCascadeHistory).mockReturnValue({
-    data: { data: cascades },
-  } as ReturnType<typeof useCascadeHistory>);
-}
-
-function mockDependencyChain(upstream: DependencyChainNode[], downstream: DependencyChainNode[] = []) {
-  vi.mocked(useDependencyChain).mockReturnValue({
-    data: { data: { upstream, downstream } },
-  } as ReturnType<typeof useDependencyChain>);
-}
-
-function renderPanel(props: Partial<React.ComponentProps<typeof ServiceDetailPanel>> = {}) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MantineProvider theme={theme} defaultColorScheme="dark">
-        <ServiceDetailPanel
-          serviceId={props.serviceId ?? 'r1'}
-          onClose={props.onClose ?? vi.fn()}
-          onStart={props.onStart ?? vi.fn()}
-          onStop={props.onStop ?? vi.fn()}
-        />
-      </MantineProvider>
-    </QueryClientProvider>,
-  );
-}
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  mockServices([baseService]);
-  mockActiveCascades([]);
-  mockCascadeHistory([]);
-  mockDependencyChain([]);
+const mockNavigate = vi.hoisted(() => vi.fn());
+vi.mock('react-router', async () => {
+  const actual = await vi.importActual('react-router');
+  return { ...actual, useNavigate: () => mockNavigate };
 });
 
-describe('ServiceDetailPanel — Header', () => {
-  it('renders service name and status badge', () => {
-    renderPanel();
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return ({ children }: { children: React.ReactNode }) =>
+    React.createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      React.createElement(
+        MantineProvider,
+        null,
+        React.createElement(MemoryRouter, null, children),
+      ),
+    );
+}
 
-    expect(screen.getByText('Jellyfin')).toBeInTheDocument();
+const defaultNode: ServiceDetailNode = {
+  id: 'node-1',
+  name: 'Mon Serveur',
+  type: 'physical',
+  status: 'offline',
+  serviceUrl: null,
+  isPinned: true,
+};
+
+function renderPanel(props: Partial<ServiceDetailPanelProps> = {}) {
+  const defaultProps: ServiceDetailPanelProps = {
+    node: defaultNode,
+    opened: true,
+    onClose: vi.fn(),
+    onStartCascade: vi.fn(),
+    onStopCascade: vi.fn(),
+    ...props,
+  };
+
+  const Wrapper = createWrapper();
+  return {
+    ...render(
+      <Wrapper>
+        <ServiceDetailPanel {...defaultProps} />
+      </Wrapper>,
+    ),
+    props: defaultProps,
+  };
+}
+
+describe('ServiceDetailPanel', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    useCascadeStore.setState({ cascades: {} });
+    mockUseDependencies.mockReturnValue({
+      data: { data: { upstream: [], downstream: [] } },
+      isLoading: false,
+    });
+  });
+
+  it('should render drawer with node name when opened', () => {
+    renderPanel();
+    expect(screen.getByText('Mon Serveur')).toBeInTheDocument();
+  });
+
+  it('should not render node content when opened is false', () => {
+    renderPanel({ opened: false });
+    expect(screen.queryByText('Mon Serveur')).not.toBeInTheDocument();
+  });
+
+  it('should render header with icon, name, and status badge', () => {
+    renderPanel({ node: { ...defaultNode, status: 'online' } });
+    expect(screen.getByText('Mon Serveur')).toBeInTheDocument();
     expect(screen.getByText('Actif')).toBeInTheDocument();
   });
 
-  it('renders close button with aria-label', () => {
+  it('should have dependencies tab active by default', () => {
     renderPanel();
-
-    expect(screen.getByRole('button', { name: 'Fermer' })).toBeInTheDocument();
+    const tab = screen.getByRole('tab', { name: /Dépendances/i });
+    expect(tab).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('calls onClose when close button is clicked', async () => {
-    const onClose = vi.fn();
-    renderPanel({ onClose });
-
-    await userEvent.click(screen.getByRole('button', { name: 'Fermer' }));
-    expect(onClose).toHaveBeenCalledTimes(1);
-  });
-
-  it('has correct aria-label on the drawer', () => {
-    renderPanel();
-
-    expect(screen.getByLabelText('Detail du service Jellyfin')).toBeInTheDocument();
-  });
-});
-
-describe('ServiceDetailPanel — Dependencies Tab', () => {
-  it('shows "Aucune dependance" when no upstream deps', () => {
-    mockDependencyChain([]);
-    renderPanel();
-
-    expect(screen.getByText('Aucune dependance')).toBeInTheDocument();
-  });
-
-  it('renders upstream dependency chain with names and statuses', () => {
-    mockDependencyChain([
-      { nodeType: 'service', nodeId: 'm1', name: 'NAS Server', status: 'online' },
-      { nodeType: 'service', nodeId: 'r2', name: 'Docker Host', status: 'running' },
-    ]);
-    renderPanel();
-
-    expect(screen.getByText('NAS Server')).toBeInTheDocument();
-    expect(screen.getByText('Docker Host')).toBeInTheDocument();
-    // All nodes are now type 'service'
-    const serviceLabels = screen.getAllByText('Service');
-    expect(serviceLabels.length).toBe(2);
-    expect(screen.getByText('online')).toBeInTheDocument();
-    expect(screen.getByText('running')).toBeInTheDocument();
-  });
-});
-
-describe('ServiceDetailPanel — Activity Tab', () => {
-  it('shows "Aucune activite recente" when no history', async () => {
-    mockCascadeHistory([]);
-    renderPanel();
-
-    await userEvent.click(screen.getByRole('tab', { name: 'Activite' }));
-    expect(screen.getByText('Aucune activite recente')).toBeInTheDocument();
-  });
-
-  it('renders cascade history table with timestamps, types, and results', async () => {
-    mockCascadeHistory([
-      {
-        id: 'c1',
-        serviceId: 'r1',
-        type: 'start',
-        status: 'completed',
-        currentStep: 3,
-        totalSteps: 3,
-        failedStep: null,
-        errorCode: null,
-        errorMessage: null,
-        startedAt: '2026-02-11T14:30:00Z',
-        completedAt: '2026-02-11T14:31:00Z',
+  it('should render upstream dependencies in the dependencies tab', () => {
+    mockUseDependencies.mockReturnValue({
+      data: {
+        data: {
+          upstream: [
+            { linkId: 'l1', nodeId: 'n2', name: 'NAS-Storage', type: 'physical', status: 'online' },
+            { linkId: 'l2', nodeId: 'n3', name: 'Proxmox-01', type: 'vm', status: 'offline' },
+          ],
+          downstream: [],
+        },
       },
-      {
-        id: 'c2',
-        serviceId: 'r1',
-        type: 'start',
-        status: 'failed',
-        currentStep: 1,
-        totalSteps: 3,
-        failedStep: 1,
-        errorCode: 'SSH_FAILED',
-        errorMessage: 'Connexion SSH impossible',
-        startedAt: '2026-02-11T10:15:00Z',
-        completedAt: '2026-02-11T10:16:00Z',
-      },
-    ]);
+      isLoading: false,
+    });
+
     renderPanel();
-
-    await userEvent.click(screen.getByRole('tab', { name: 'Activite' }));
-
-    // Check table headers
-    expect(screen.getByText('Horodatage')).toBeInTheDocument();
-    expect(screen.getByText('Type')).toBeInTheDocument();
-    expect(screen.getByText('Resultat')).toBeInTheDocument();
-
-    // Check cascade types
-    const rows = screen.getAllByRole('row');
-    // 1 header row + 2 data rows
-    expect(rows).toHaveLength(3);
-
-    expect(screen.getByText('Reussi')).toBeInTheDocument();
-    expect(screen.getByText(/Echoue/)).toBeInTheDocument();
-  });
-});
-
-describe('ServiceDetailPanel — Actions Zone', () => {
-  it('shows "Demarrer" button when service is stopped', () => {
-    mockServices([{ ...baseService, status: 'stopped' }]);
-    renderPanel();
-
-    expect(screen.getByRole('button', { name: /Demarrer Jellyfin/ })).toBeInTheDocument();
+    expect(screen.getByText('NAS-Storage')).toBeInTheDocument();
+    expect(screen.getByText('Proxmox-01')).toBeInTheDocument();
   });
 
-  it('calls onStart when "Demarrer" button is clicked', async () => {
-    const onStart = vi.fn();
-    mockServices([{ ...baseService, status: 'stopped' }]);
-    renderPanel({ onStart });
-
-    await userEvent.click(screen.getByRole('button', { name: /Demarrer Jellyfin/ }));
-    expect(onStart).toHaveBeenCalledWith('r1');
-  });
-
-  it('shows "Ouvrir" link when service is running with serviceUrl', () => {
-    renderPanel();
-
-    const link = screen.getByRole('link', { name: /Ouvrir Jellyfin/ });
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute('href', 'http://jellyfin:8096');
-  });
-
-  it('shows enabled "Arreter" button when service is running', () => {
-    renderPanel();
-
-    const btn = screen.getByRole('button', { name: /Arreter Jellyfin/ });
-    expect(btn).toBeInTheDocument();
-    expect(btn).not.toBeDisabled();
-  });
-
-  it('shows "Reessayer" button when cascade failed', () => {
-    mockServices([{ ...baseService, status: 'stopped' }]);
-    mockActiveCascades([{
-      id: 'c1',
-      serviceId: 'r1',
-      type: 'start',
-      status: 'failed',
-      currentStep: 1,
-      totalSteps: 3,
-      failedStep: 1,
-      errorCode: 'SSH_FAILED',
-      errorMessage: 'Connexion SSH impossible',
-      startedAt: '2026-01-01T00:00:00Z',
-      completedAt: '2026-01-01T00:01:00Z',
-    }]);
-    renderPanel();
-
-    expect(screen.getByRole('button', { name: /Reessayer Jellyfin/ })).toBeInTheDocument();
-  });
-
-  it('shows loading button when cascade is starting', () => {
-    mockServices([{ ...baseService, status: 'stopped' }]);
-    mockActiveCascades([{
-      id: 'c1',
-      serviceId: 'r1',
-      type: 'start',
-      status: 'in_progress',
-      currentStep: 1,
-      totalSteps: 3,
-      failedStep: null,
-      errorCode: null,
-      errorMessage: null,
-      startedAt: '2026-01-01T00:00:00Z',
-      completedAt: null,
-    }]);
-    renderPanel();
-
-    expect(screen.getByText('En demarrage...')).toBeInTheDocument();
-  });
-});
-
-describe('ServiceDetailPanel — Stop Confirmation Modal', () => {
-  it('opens confirmation modal when "Arreter" button is clicked', async () => {
-    renderPanel();
-
-    await userEvent.click(screen.getByRole('button', { name: /Arreter Jellyfin/ }));
-
-    expect(await screen.findByText(/Arrêter Jellyfin et ses dépendances/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Annuler' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Arrêter' })).toBeInTheDocument();
-  });
-
-  it('shows downstream dependencies in the confirmation modal', async () => {
-    mockDependencyChain(
-      [],
-      [
-        { nodeType: 'service', nodeId: 'r2', name: 'Plex', status: 'running' },
-        { nodeType: 'service', nodeId: 'r3', name: 'Sonarr', status: 'online' },
-      ],
+  it('should render logs content in the logs tab', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { logs: [], total: 0 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
     );
     renderPanel();
-
-    await userEvent.click(screen.getByRole('button', { name: /Arreter Jellyfin/ }));
-
-    expect(await screen.findByText('Les services suivants seront aussi arrêtés :')).toBeInTheDocument();
-    expect(screen.getByText('Plex')).toBeInTheDocument();
-    expect(screen.getByText('Sonarr')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: /Logs/i }));
+    expect(await screen.findByText('Aucun log pour ce noeud')).toBeInTheDocument();
   });
 
-  it('shows "Aucune dépendance" message when no downstream deps', async () => {
-    mockDependencyChain([], []);
+  it('should render "Démarrer" button for offline node', () => {
+    renderPanel({ node: { ...defaultNode, status: 'offline' } });
+    expect(screen.getByRole('button', { name: /Démarrer Mon Serveur/i })).toBeInTheDocument();
+  });
+
+  it('should render "Arrêter" button for online node', () => {
+    renderPanel({ node: { ...defaultNode, status: 'online' } });
+    expect(screen.getByRole('button', { name: /Arrêter Mon Serveur/i })).toBeInTheDocument();
+  });
+
+  it('should render "Ouvrir" + "Arrêter" for online node with serviceUrl', () => {
+    renderPanel({ node: { ...defaultNode, status: 'online', serviceUrl: 'https://service.local' } });
+    expect(screen.getByRole('button', { name: /Ouvrir Mon Serveur/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Arrêter Mon Serveur/i })).toBeInTheDocument();
+  });
+
+  it('should open stop confirmation modal when "Arrêter" is clicked', async () => {
+    renderPanel({ node: { ...defaultNode, status: 'online' } });
+    await userEvent.click(screen.getByRole('button', { name: /Arrêter Mon Serveur/i }));
+    expect(await screen.findByRole('button', { name: /Confirmer l'arrêt/i })).toBeInTheDocument();
+    expect(screen.getByText(/Cette action va arrêter/)).toBeInTheDocument();
+  });
+
+  it('should call onStopCascade when stop is confirmed', async () => {
+    const onStopCascade = vi.fn();
+    renderPanel({ node: { ...defaultNode, status: 'online' }, onStopCascade });
+    await userEvent.click(screen.getByRole('button', { name: /Arrêter Mon Serveur/i }));
+    const confirmBtn = await screen.findByRole('button', { name: /Confirmer l'arrêt/i });
+    await userEvent.click(confirmBtn);
+    expect(onStopCascade).toHaveBeenCalledWith('node-1');
+  });
+
+  it('should call onStartCascade when "Démarrer" is clicked', async () => {
+    const onStartCascade = vi.fn();
+    renderPanel({ node: { ...defaultNode, status: 'offline' }, onStartCascade });
+    await userEvent.click(screen.getByRole('button', { name: /Démarrer Mon Serveur/i }));
+    expect(onStartCascade).toHaveBeenCalledWith('node-1');
+  });
+
+  it('should have aria-label on the drawer', () => {
     renderPanel();
-
-    await userEvent.click(screen.getByRole('button', { name: /Arreter Jellyfin/ }));
-
-    expect(await screen.findByText('Aucune dépendance ne sera affectée.')).toBeInTheDocument();
+    const drawer = document.querySelector('.mantine-Drawer-root');
+    expect(drawer).toHaveAttribute('aria-label', 'Détail du service Mon Serveur');
   });
 
-  it('calls onStop and closes modal when "Arrêter" is confirmed', async () => {
-    const onStop = vi.fn();
-    renderPanel({ onStop });
+  it('should render CascadeProgress when cascade is active', () => {
+    useCascadeStore.setState({
+      cascades: {
+        'node-1': {
+          cascadeId: 'c-1',
+          step: 2,
+          totalSteps: 5,
+          currentNodeName: 'NAS-Storage',
+          status: 'in_progress',
+        },
+      },
+    });
 
-    await userEvent.click(screen.getByRole('button', { name: /Arreter Jellyfin/ }));
-    await userEvent.click(await screen.findByRole('button', { name: 'Arrêter' }));
-
-    expect(onStop).toHaveBeenCalledWith('r1');
+    renderPanel({ node: { ...defaultNode, status: 'starting' } });
+    expect(screen.getByText('NAS-Storage')).toBeInTheDocument();
   });
 
-  it('closes modal without calling onStop when "Annuler" is clicked', async () => {
-    const onStop = vi.fn();
-    renderPanel({ onStop });
+  it('should render actual logs and "Voir tous les logs" link in logs tab', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        data: {
+          logs: [
+            {
+              id: 'log-1',
+              timestamp: '2026-02-15T14:30:00.000Z',
+              level: 'info',
+              source: 'cascade-engine',
+              message: 'Service démarré OK',
+              reason: null,
+              details: null,
+              nodeId: 'node-1',
+              nodeName: 'Mon Serveur',
+              eventType: 'start',
+              errorCode: null,
+              errorDetails: null,
+              cascadeId: null,
+            },
+          ],
+          total: 1,
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
 
-    await userEvent.click(screen.getByRole('button', { name: /Arreter Jellyfin/ }));
-    await userEvent.click(await screen.findByRole('button', { name: 'Annuler' }));
-
-    expect(onStop).not.toHaveBeenCalled();
-  });
-
-  it('shows loading button during active stop cascade', () => {
-    mockActiveCascades([{
-      id: 'c1',
-      serviceId: 'r1',
-      type: 'stop',
-      status: 'in_progress',
-      currentStep: 1,
-      totalSteps: 2,
-      failedStep: null,
-      errorCode: null,
-      errorMessage: null,
-      startedAt: '2026-01-01T00:00:00Z',
-      completedAt: null,
-    }]);
     renderPanel();
+    await userEvent.click(screen.getByRole('tab', { name: /Logs/i }));
 
-    expect(screen.getByText('En arret...')).toBeInTheDocument();
-  });
-});
-
-describe('ServiceDetailPanel — Not found', () => {
-  it('shows "Service introuvable" when service does not exist', () => {
-    mockServices([]);
-    renderPanel({ serviceId: 'nonexistent' });
-
-    expect(screen.getByText('Service introuvable.')).toBeInTheDocument();
-  });
-});
-
-describe('ServiceDetailPanel — Tabs navigation', () => {
-  it('defaults to "Dependances" tab', () => {
-    mockDependencyChain([
-      { nodeType: 'service', nodeId: 'm1', name: 'NAS Server', status: 'online' },
-    ]);
-    renderPanel();
-
-    expect(screen.getByText('NAS Server')).toBeInTheDocument();
+    expect(await screen.findByText('Service démarré OK')).toBeInTheDocument();
+    const link = screen.getByText('Voir tous les logs');
+    expect(link).toBeInTheDocument();
+    expect(link.closest('a')).toHaveAttribute('href', '/logs?nodeId=node-1');
   });
 
-  it('switches to "Activite" tab and back', async () => {
-    mockDependencyChain([
-      { nodeType: 'service', nodeId: 'm1', name: 'NAS Server', status: 'online' },
-    ]);
-    mockCascadeHistory([]);
-    renderPanel();
+  it('should show downstream deps in stop modal', async () => {
+    mockUseDependencies.mockReturnValue({
+      data: {
+        data: {
+          upstream: [],
+          downstream: [
+            { linkId: 'l1', nodeId: 'n2', name: 'VM-Media', type: 'vm', status: 'online' },
+          ],
+        },
+      },
+      isLoading: false,
+    });
 
-    await userEvent.click(screen.getByRole('tab', { name: 'Activite' }));
-    expect(screen.getByText('Aucune activite recente')).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('tab', { name: 'Dependances' }));
-    expect(screen.getByText('NAS Server')).toBeInTheDocument();
+    renderPanel({ node: { ...defaultNode, status: 'online' } });
+    await userEvent.click(screen.getByRole('button', { name: /Arrêter Mon Serveur/i }));
+    expect(await screen.findByText('VM-Media')).toBeInTheDocument();
   });
 });

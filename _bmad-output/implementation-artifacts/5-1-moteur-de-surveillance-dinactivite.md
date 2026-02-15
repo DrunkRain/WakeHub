@@ -1,418 +1,335 @@
 # Story 5.1 : Moteur de surveillance d'inactivité
 
-Status: ready-for-dev
+Status: done
+
+<!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
+<!-- Créé: 2026-02-13 | Epic 5: Arrêt Automatique sur Inactivité | FRs: FR34-FR39 -->
 
 ## Story
 
 As a administrateur,
 I want que WakeHub surveille l'activité de mes services et les éteigne automatiquement après un délai d'inactivité,
-so that mon homelab ne consomme pas d'électricité inutilement.
+So that mon homelab ne consomme pas d'électricité inutilement.
 
 ## Acceptance Criteria (BDD)
 
-1. **Given** la table `inactivity_rules` n'existe pas encore
-   **When** la migration Drizzle s'exécute pour cette story
-   **Then** la table `inactivity_rules` est créée avec les colonnes : id (UUID text PK), service_id (FK → services), timeout_minutes (integer, défaut 30), monitoring_criteria (text JSON), is_enabled (integer boolean, défaut 1/true), created_at (integer timestamp), updated_at (integer timestamp)
-   **And** le délai d'inactivité par défaut (30 min) est géré comme valeur de fallback dans le code (constante `DEFAULT_INACTIVITY_TIMEOUT_MINUTES = 30`)
+### AC1 : Schéma de base de données — table `inactivity_rules`
 
-2. **Given** le service `inactivity-monitor.ts` est implémenté
-   **When** il est démarré avec le serveur Fastify
-   **Then** il exécute une boucle de vérification périodique (toutes les 60 secondes) pour chaque service actif ayant une règle d'inactivité activée
+**Given** la table `inactivity_rules` n'existe pas encore
+**When** la migration Drizzle s'exécute
+**Then** la table est créée avec : `id` (UUID PK), `node_id` (FK → nodes, CASCADE delete), `timeout_minutes` (entier, défaut 30), `monitoring_criteria` (JSON : types de critères actifs), `is_enabled` (booléen, défaut true), `created_at`, `updated_at`
 
-3. **Given** un service actif a une règle d'inactivité configurée et activée
-   **When** le moniteur vérifie l'activité
-   **Then** il interroge le connecteur de la plateforme via `getStatus()` pour vérifier si le service est toujours en ligne
-   **And** il consulte les critères de monitoring configurés (dernière activité connue, statut connecteur)
-   **And** si aucune activité n'est détectée, il incrémente le temps d'inactivité pour ce service
+### AC2 : Service `inactivity-monitor.ts` — boucle de vérification
 
-4. **Given** un service est inactif depuis plus longtemps que son délai configuré
-   **When** le délai est dépassé
-   **Then** le moniteur déclenche automatiquement une cascade d'arrêt via `executeCascadeStop()` en interne
-   **And** un événement SSE `auto-shutdown` est émis avec : serviceId, serviceName, inactivityMinutes
-   **And** l'opération est enregistrée dans les logs avec la raison ("Arrêt automatique après X minutes d'inactivité")
+**Given** le service `inactivity-monitor.ts` est implémenté
+**When** il est démarré avec le serveur
+**Then** il exécute une boucle de vérification périodique (toutes les minutes) pour chaque nœud actif ayant une règle d'inactivité activée
 
-5. **Given** un service a un délai d'inactivité personnalisé (table `inactivity_rules`)
-   **When** le moniteur vérifie ce service
-   **Then** il utilise le délai personnalisé au lieu du délai par défaut (30 min)
+### AC3 : Vérification des critères d'activité
 
-6. **Given** aucune règle personnalisée n'est définie pour un service
-   **When** le moniteur vérifie ce service
-   **Then** il ne déclenche PAS d'arrêt automatique (pas de monitoring par défaut — uniquement les services avec une règle activée)
+**Given** un nœud actif a une règle d'inactivité configurée
+**When** le moniteur vérifie l'activité
+**Then** il interroge les critères configurables : connexions réseau, activité CPU/RAM, dernier accès
+**And** si aucune activité → incrémente le compteur d'inactivité
 
-7. **Given** de l'activité est détectée sur un service (statut change, cascade lancée, etc.)
-   **When** le compteur d'inactivité est en cours
-   **Then** le compteur est remis à zéro
-   **And** l'arrêt automatique est annulé
+### AC4 : Déclenchement d'arrêt automatique
 
-8. **Given** un arrêt automatique est déclenché
-   **When** une cascade d'arrêt est déjà en cours pour ce service
-   **Then** le moniteur ne lance PAS une deuxième cascade
-   **And** il log un message "Arrêt automatique ignoré — cascade déjà en cours"
+**Given** le délai d'inactivité est dépassé
+**When** le moniteur le détecte
+**Then** il déclenche une cascade d'arrêt via le `cascade-engine`
+**And** un événement SSE `auto-shutdown` est émis
+**And** l'opération est enregistrée dans les logs avec la raison
 
-9. **Given** un arrêt automatique est déclenché pour un service
-   **When** un autre service actif dépend de ce service (dependant downstream actif)
-   **Then** l'arrêt automatique est annulé
-   **And** la raison est enregistrée dans les logs ("Arrêt automatique de [service] annulé — dépendant actif : [nom]")
-   **And** un événement SSE `auto-shutdown` est émis avec `cancelled: true` et la raison
+### AC5 : Annulation sur détection d'activité
 
-10. **Given** les routes API sont implémentées
-    **When** `GET /api/inactivity-rules?serviceId=X` est appelé
-    **Then** les règles d'inactivité pour ce service sont retournées
-    **When** `POST /api/inactivity-rules` est appelé avec serviceId, timeoutMinutes, monitoringCriteria, isEnabled
-    **Then** une règle est créée (une seule règle par service — upsert si déjà existante)
-    **When** `PUT /api/inactivity-rules/:id` est appelé
-    **Then** la règle est mise à jour (délai, critères, activation/désactivation)
-    **When** `DELETE /api/inactivity-rules/:id` est appelé
-    **Then** la règle est supprimée
+**Given** de l'activité est détectée sur un nœud
+**When** le compteur d'inactivité est en cours
+**Then** le compteur est remis à zéro et l'arrêt est annulé
 
-11. **Given** le type SSE `auto-shutdown` est ajouté aux types partagés
-    **When** un événement auto-shutdown est émis
-    **Then** le frontend peut invalider les queries TanStack appropriées
+### AC6 : Routes API pour gestion des règles
+
+**Given** les routes API sont implémentées
+**When** `GET /api/inactivity-rules?nodeId=X` et `PUT /api/inactivity-rules/:id` sont appelées
+**Then** les règles sont retournées ou mises à jour avec le format `{ data }` / `{ error }` standard
 
 ## Tasks / Subtasks
 
-- [ ] Task 1 — Migration DB : table `inactivity_rules` (AC: #1)
-  - [ ] 1.1 Créer le fichier de migration SQL `drizzle/0008_inactivity_rules.sql`
-  - [ ] 1.2 Ajouter le schéma `inactivityRules` dans `db/schema.ts`
-  - [ ] 1.3 Mettre à jour `drizzle/meta/_journal.json` et créer le snapshot
+- [x] **Task 1 : Schéma Drizzle & migration** (AC: #1)
+  - [x] 1.1 Ajouter la table `inactivityRules` dans `apps/server/src/db/schema.ts`
+  - [x] 1.2 Définir les colonnes : `id` (text PK, UUID), `nodeId` (text FK → nodes, CASCADE delete), `timeoutMinutes` (integer, défaut 30), `monitoringCriteria` (text, JSON), `isEnabled` (integer boolean, défaut true), `createdAt`, `updatedAt`
+  - [x] 1.3 Créer les index : `idx_inactivity_rules_node_id`, `idx_inactivity_rules_enabled`
+  - [x] 1.4 Générer la migration Drizzle (`npx drizzle-kit generate`)
 
-- [ ] Task 2 — Types partagés (AC: #11)
-  - [ ] 2.1 Ajouter `InactivityRule` type dans `packages/shared/src/index.ts`
-  - [ ] 2.2 Ajouter `'auto-shutdown'` au type `SSEEventType`
-  - [ ] 2.3 Ajouter `AutoShutdownEvent` type (serviceId, serviceName, inactivityMinutes, cancelled?, reason?)
+- [x] **Task 2 : Types partagés** (AC: #1, #6)
+  - [x] 2.1 Créer `packages/shared/src/models/inactivity-rule.ts` avec les types `InactivityRule`, `MonitoringCriteria`
+  - [x] 2.2 Créer `packages/shared/src/api/inactivity-rules.ts` avec `InactivityRuleResponse`, `UpdateInactivityRuleRequest`
+  - [x] 2.3 Ajouter le type SSE `auto-shutdown` dans `packages/shared/src/models/sse-event.ts`
+  - [x] 2.4 Exporter tout depuis `packages/shared/src/index.ts`
 
-- [ ] Task 3 — Service `inactivity-monitor.ts` (AC: #2, #3, #4, #5, #6, #7, #8, #9)
-  - [ ] 3.1 Créer `apps/server/src/services/inactivity-monitor.ts`
-  - [ ] 3.2 Implémenter la classe/module avec : `start(db, sseManager)`, `stop()`, `tick()` (un cycle de vérification)
-  - [ ] 3.3 Implémenter la logique de tracking d'inactivité (Map en mémoire serviceId → firstInactiveAt)
-  - [ ] 3.4 Implémenter la vérification des dépendants actifs avant arrêt (via dependency-graph)
-  - [ ] 3.5 Implémenter la protection contre les cascades en double (vérifier cascades en cours dans la DB)
-  - [ ] 3.6 Créer les tests `inactivity-monitor.test.ts`
+- [x] **Task 3 : Service `inactivity-monitor.ts`** (AC: #2, #3, #4, #5)
+  - [x] 3.1 Créer `apps/server/src/services/inactivity-monitor.ts` avec des fonctions exportées (pas de classe)
+  - [x] 3.2 Implémenter `startInactivityMonitor(db, sseManager, decryptFn)` — initialise le `setInterval` (60s)
+  - [x] 3.3 Implémenter `stopInactivityMonitor()` — arrête l'intervalle (pour shutdown propre)
+  - [x] 3.4 Implémenter `checkAllInactivityRules(db, sseManager, decryptFn)` — boucle sur toutes les règles actives
+  - [x] 3.5 Implémenter la logique de vérification d'activité par critère (réseau, CPU/RAM, dernier accès) — **Phase 1 : "last access" seulement** (ping/SSH check), les autres critères seront des stubs retournant `true` (actif)
+  - [x] 3.6 Implémenter le compteur d'inactivité en mémoire (`Map<nodeId, { inactiveMinutes: number }>`)
+  - [x] 3.7 Intégrer `executeCascadeStop()` du cascade-engine pour le déclenchement d'arrêt
+  - [x] 3.8 Émettre l'événement SSE `auto-shutdown` via `sseManager.broadcast()`
+  - [x] 3.9 Logger chaque opération via `operationLogs` (déclenchement, annulation, erreur)
+  - [x] 3.10 Réinitialiser le compteur quand une activité est détectée
 
-- [ ] Task 4 — Routes API `inactivity-rules.routes.ts` (AC: #10)
-  - [ ] 4.1 Créer `apps/server/src/routes/inactivity-rules.routes.ts`
-  - [ ] 4.2 Implémenter GET /api/inactivity-rules (query param serviceId optionnel)
-  - [ ] 4.3 Implémenter POST /api/inactivity-rules (création)
-  - [ ] 4.4 Implémenter PUT /api/inactivity-rules/:id (mise à jour)
-  - [ ] 4.5 Implémenter DELETE /api/inactivity-rules/:id (suppression)
-  - [ ] 4.6 Créer les tests `inactivity-rules.routes.test.ts`
+- [x] **Task 4 : Routes API inactivity-rules** (AC: #6)
+  - [x] 4.1 Créer `apps/server/src/routes/inactivity-rules.routes.ts`
+  - [x] 4.2 Implémenter `GET /api/inactivity-rules?nodeId=X` — retourne les règles pour un nœud
+  - [x] 4.3 Implémenter `PUT /api/inactivity-rules/:id` — met à jour une règle existante
+  - [x] 4.4 Implémenter `POST /api/inactivity-rules` — crée une règle pour un nœud (appelé automatiquement à la création de nœud ou manuellement)
+  - [x] 4.5 Ajouter la validation JSON Schema Fastify sur toutes les routes
+  - [x] 4.6 Ajouter le error handler standard au plugin
 
-- [ ] Task 5 — Enregistrement dans app.ts et démarrage du moniteur (AC: #2)
-  - [ ] 5.1 Importer et register les routes inactivity-rules dans `app.ts`
-  - [ ] 5.2 Démarrer le moniteur d'inactivité après le démarrage du serveur
-  - [ ] 5.3 Arrêter le moniteur proprement au shutdown du serveur (hook `onClose`)
+- [x] **Task 5 : Intégration serveur** (AC: #2)
+  - [x] 5.1 Enregistrer les routes dans `apps/server/src/app.ts` avec `prefix: '/api/inactivity-rules'`
+  - [x] 5.2 Appeler `startInactivityMonitor(db, sseManager, decryptFn)` après le démarrage du serveur
+  - [x] 5.3 Appeler `stopInactivityMonitor()` dans le hook `onClose` de Fastify
 
-- [ ] Task 6 — Vérification finale (AC: tous)
-  - [ ] 6.1 `tsc --noEmit` server + web — zero erreur
-  - [ ] 6.2 Tous les tests passent (server + web)
-  - [ ] 6.3 Vérifier que les tests existants ne sont pas cassés
+- [x] **Task 6 : Tests unitaires** (AC: tous)
+  - [x] 6.1 Créer `apps/server/src/services/inactivity-monitor.test.ts`
+  - [x] 6.2 Tester : démarrage/arrêt du moniteur
+  - [x] 6.3 Tester : détection d'inactivité et incrémentation du compteur
+  - [x] 6.4 Tester : déclenchement de cascade stop après timeout
+  - [x] 6.5 Tester : réinitialisation du compteur sur activité détectée
+  - [x] 6.6 Tester : émission de l'événement SSE `auto-shutdown`
+  - [x] 6.7 Tester : logging des opérations
+  - [x] 6.8 Tester les routes API (GET, PUT, POST) avec validation
 
 ## Dev Notes
 
-### Architecture du Moteur d'Inactivité
+### Patterns architecturaux CRITIQUES à respecter
 
-Le moteur d'inactivité est un service backend qui tourne en arrière-plan. Il ne fait PAS de polling réseau — il utilise les connecteurs existants (`getStatus()`) et un tracking en mémoire.
+1. **Fonctions exportées, PAS de classes** — Les services existants (`cascade-engine.ts`, `dependency-graph.ts`) exportent des fonctions async pures. Le `inactivity-monitor` DOIT suivre le même pattern. Exception : le state interne (compteurs, intervalle) est stocké dans des variables de module.
 
-```
-[setInterval 60s] → tick()
-  → Pour chaque règle active (inactivity_rules WHERE is_enabled = 1) :
-    1. Récupérer le service correspondant
-    2. Si service.status !== 'online' → ignorer (rien à éteindre)
-    3. Vérifier via getStatus() si le service est vraiment actif
-    4. Si actif → reset le compteur d'inactivité
-    5. Si inactif → vérifier si le temps cumulé dépasse timeout_minutes
-    6. Si dépassé → vérifier qu'aucune cascade n'est déjà en cours
-    7. Si dépassé → vérifier qu'aucun dépendant downstream n'est actif
-    8. Si tout OK → lancer executeCascadeStop() + émettre SSE auto-shutdown
-```
+2. **Injection de dépendances par paramètres** — `db: BetterSQLite3Database<typeof schema>`, `sseManager: SSEManager`, `decryptFn` passés en arguments, jamais importés directement.
 
-### Tracking d'Inactivité (en mémoire)
+3. **Format API unifié** — Toutes les réponses : `{ data: { ... } }` en succès, `{ error: { code, message, details? } }` en erreur. JSON Schema validation Fastify native.
 
-Utiliser une `Map<string, Date>` pour tracker le moment où chaque service a été détecté inactif pour la première fois :
+4. **Logging via `operationLogs`** — Chaque opération significative insérée dans la table `operation_logs` avec : `level`, `source: 'inactivity-monitor'`, `message`, `reason`, `details` (JSON).
 
-```typescript
-// Map<serviceId, firstInactiveAt>
-private inactiveTimers = new Map<string, Date>();
+5. **SSE broadcast pattern** — Utiliser `sseManager.broadcast('auto-shutdown', { nodeId, reason, ruleId, timestamp })`. Le type `auto-shutdown` est nouveau et doit être ajouté aux types SSE partagés.
 
-// Quand le service est actif → supprimer du map (reset)
-// Quand le service est inactif et PAS dans le map → ajouter maintenant
-// Quand le service est inactif et DANS le map → vérifier si (now - firstInactiveAt) > timeout
-```
+6. **Schéma Drizzle** — Suivre le pattern exact de la table `cascades` :
+   - `text('id').primaryKey().$defaultFn(() => crypto.randomUUID())`
+   - `integer('...', { mode: 'timestamp' }).$defaultFn(() => new Date())` pour les timestamps
+   - `integer('...', { mode: 'boolean' })` pour les booléens
+   - `foreignKey()` + `.onDelete('cascade')` dans le bloc de table
+   - Index nommés `idx_{table}_{column}`
 
-**Avantage** : pas besoin de colonne `last_active_at` en DB, pas de writes fréquents. Le timer est volatil (reset au redémarrage du serveur), ce qui est acceptable — au pire, on repart à zéro sur le délai après un redémarrage.
+7. **Nommage** — Fichiers TS en `kebab-case`, colonnes DB en `snake_case`, propriétés API en `camelCase`, types en `PascalCase`.
 
-### Fichiers Existants Critiques
+### Détails d'implémentation du moniteur d'inactivité
 
-| Fichier | Rôle pour cette story |
-|---|---|
-| `apps/server/src/db/schema.ts` | Ajouter table `inactivityRules`. Le champ `services.inactivityTimeout` existe déjà mais n'est PAS utilisé — la nouvelle table `inactivity_rules` le remplace avec plus de flexibilité |
-| `apps/server/src/services/cascade-engine.ts` | Appeler `executeCascadeStop(db, cascadeId, serviceId, { sseManager })` pour déclencher l'arrêt |
-| `apps/server/src/services/dependency-graph.ts` | Appeler `getDownstreamLogicalDependents(db, serviceId)` pour vérifier les dépendants actifs avant arrêt |
-| `apps/server/src/sse/sse-manager.ts` | Appeler `sseManager.broadcast('auto-shutdown', data)` pour notifier le frontend |
-| `apps/server/src/app.ts` | Register les nouvelles routes + démarrer le moniteur |
-| `apps/server/src/connectors/connector.interface.ts` | Interface `PlatformConnector` avec `getStatus(): Promise<'online' \| 'offline' \| 'unknown' \| 'error'>` |
-| `apps/server/src/services/connector-factory.ts` | `createConnectorForNode(db, 'service', serviceId)` pour obtenir le connecteur d'un service |
-| `packages/shared/src/index.ts` | Ajouter types `InactivityRule`, `AutoShutdownEvent`, mettre à jour `SSEEventType` |
-
-### Schéma DB — Table `inactivity_rules`
-
-```sql
-CREATE TABLE inactivity_rules (
-  id TEXT PRIMARY KEY,
-  service_id TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
-  timeout_minutes INTEGER NOT NULL DEFAULT 30,
-  monitoring_criteria TEXT DEFAULT '{}',
-  is_enabled INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE UNIQUE INDEX idx_inactivity_rules_service_id ON inactivity_rules(service_id);
-```
-
-**Note** : Index UNIQUE sur `service_id` — une seule règle par service. Simplifie la logique et évite les conflits.
-
-### Schéma Drizzle correspondant
+#### Architecture du compteur en mémoire
 
 ```typescript
-export const inactivityRules = sqliteTable('inactivity_rules', {
-  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
-  serviceId: text('service_id').notNull().references(() => services.id, { onDelete: 'cascade' }),
-  timeoutMinutes: integer('timeout_minutes').notNull().default(30),
-  monitoringCriteria: text('monitoring_criteria').default('{}'),
-  isEnabled: integer('is_enabled', { mode: 'boolean' }).notNull().default(true),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+// State interne au module (pas de classe)
+const inactivityCounters = new Map<string, number>(); // nodeId → minutes d'inactivité
+let monitorInterval: NodeJS.Timeout | null = null;
+const MONITOR_INTERVAL_MS = 60_000; // 1 minute
 ```
 
-### Monitoring Criteria JSON
+#### Logique de `checkAllInactivityRules`
 
-Le champ `monitoring_criteria` est un JSON string qui décrit quels critères de surveillance sont actifs. Pour le MVP, seul le critère "dernière activité" (basé sur `getStatus()`) est implémenté :
+```
+1. SELECT toutes les inactivityRules WHERE isEnabled = true
+2. JOIN avec nodes WHERE status = 'online' AND configured = true
+3. Pour chaque règle :
+   a. Vérifier les critères de monitoring configurés
+   b. Si aucune activité détectée :
+      - Incrémenter inactivityCounters[nodeId] de 1
+      - Si counter >= rule.timeoutMinutes :
+        → Appeler executeCascadeStop(nodeId, db, options)
+        → sseManager.broadcast('auto-shutdown', ...)
+        → Insert dans operationLogs
+        → Supprimer le counter
+   c. Si activité détectée :
+      - Remettre inactivityCounters[nodeId] à 0
+      - Logger si le compteur était > 0 (annulation)
+```
 
+#### Phase 1 : Critères de monitoring simplifiés
+
+Pour cette story, implémenter un système extensible mais avec des vérifications simplifiées :
+
+- **`last_access`** (IMPLÉMENTÉ) : Vérifier si le nœud répond à un ping SSH rapide via le connector existant. Si le nœud a un `sshUser` + credentials, tenter une commande légère. Sinon, considérer le critère comme "actif" (safe fallback).
+- **`network_connections`** (STUB) : Retourner `true` (actif) — sera implémenté dans une future story si besoin.
+- **`cpu_ram_activity`** (STUB) : Retourner `true` (actif) — sera implémenté dans une future story si besoin.
+
+Le champ `monitoring_criteria` en JSON permet d'activer/désactiver chaque critère :
 ```json
 {
-  "checkConnectorStatus": true
+  "lastAccess": true,
+  "networkConnections": false,
+  "cpuRamActivity": false
 }
 ```
 
-Les critères avancés (CPU/RAM, connexions réseau) seront ajoutés dans de futures itérations. Le champ est extensible par design.
+Un nœud est considéré "inactif" uniquement si **tous les critères activés** retournent inactif.
 
-### Pattern de Route (à suivre strictement)
+#### Intégration avec le cascade-engine
 
 ```typescript
-const inactivityRulesRoutes: FastifyPluginAsync = async (fastify) => {
-  const errorSchema = {
-    type: 'object',
-    properties: {
-      error: {
-        type: 'object',
-        properties: {
-          code: { type: 'string' },
-          message: { type: 'string' },
-        },
-      },
-    },
-  };
+import { executeCascadeStop } from './cascade-engine.js';
 
-  // GET /api/inactivity-rules?serviceId=xxx
-  fastify.get('/api/inactivity-rules', {
-    schema: {
-      querystring: {
-        type: 'object',
-        properties: { serviceId: { type: 'string' } },
-      },
-      response: {
-        200: { type: 'object', properties: { data: { type: 'array', items: { /* ... */ } } } },
-        401: errorSchema,
-      },
-    },
-  }, async (request, reply) => { /* ... */ });
+// Créer un enregistrement cascade avant l'exécution
+const [cascade] = await db.insert(cascades).values({
+  nodeId,
+  type: 'stop',
+}).returning();
+
+const onProgress = (event: CascadeProgressEvent) => {
+  // Broadcaster les événements de progression normaux
+  broadcastCascadeEvent(sseManager, event);
 };
-```
 
-**Règles :**
-- Response schemas pour TOUS les status codes retournés (200, 400, 401, 404)
-- Format `{ data: ... }` pour le succès, `{ error: { code, message } }` pour les erreurs
-- Validation JSON Schema sur les body/querystring
-- Auth middleware automatiquement appliqué (routes sous /api/)
+// Fire-and-forget comme dans cascades.routes.ts
+executeCascadeStop(nodeId, db, {
+  cascadeId: cascade.id,
+  onProgress,
+  decryptFn,
+}).catch((err) => {
+  // Logger l'erreur mais ne pas crasher le moniteur
+  logOperation(db, 'error', 'inactivity-monitor', ...);
+});
 
-### Pattern de Test (à suivre strictement)
-
-```typescript
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { buildApp } from '../app';
-
-describe('Inactivity Rules Routes', () => {
-  let app: Awaited<ReturnType<typeof buildApp>>;
-
-  beforeEach(async () => {
-    app = await buildApp({ /* test config */ });
-  });
-
-  afterEach(async () => {
-    await app.close();
-  });
-
-  it('should create an inactivity rule', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/inactivity-rules',
-      payload: { serviceId: '...', timeoutMinutes: 30, isEnabled: true },
-    });
-    expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.body);
-    expect(body.data.timeoutMinutes).toBe(30);
-  });
+// Broadcaster l'événement auto-shutdown SÉPARÉMENT
+sseManager.broadcast('auto-shutdown', {
+  nodeId,
+  nodeName: node.name,
+  ruleId: rule.id,
+  reason: 'inactivity',
+  inactiveMinutes: counter,
+  timestamp: new Date().toISOString(),
 });
 ```
 
-### Protection contre les cascades en double
+### Fichiers à créer
 
-Avant de déclencher un arrêt automatique, le moniteur DOIT vérifier :
+| Fichier | Description |
+|---------|-------------|
+| `apps/server/src/services/inactivity-monitor.ts` | Service principal de surveillance |
+| `apps/server/src/services/inactivity-monitor.test.ts` | Tests unitaires du service |
+| `apps/server/src/routes/inactivity-rules.routes.ts` | Routes API CRUD |
+| `apps/server/src/routes/inactivity-rules.routes.test.ts` | Tests des routes (optionnel) |
+| `packages/shared/src/models/inactivity-rule.ts` | Types modèle |
+| `packages/shared/src/api/inactivity-rules.ts` | Types API request/response |
 
-```typescript
-// 1. Pas de cascade déjà en cours pour ce service
-const activeCascade = db.select().from(cascades)
-  .where(and(
-    eq(cascades.serviceId, serviceId),
-    inArray(cascades.status, ['pending', 'in_progress'])
-  ))
-  .get();
+### Fichiers à modifier
 
-if (activeCascade) {
-  // Log et skip
-  return;
-}
+| Fichier | Modification |
+|---------|-------------|
+| `apps/server/src/db/schema.ts` | Ajouter table `inactivityRules` + export |
+| `apps/server/src/app.ts` | Enregistrer routes + démarrer/arrêter moniteur |
+| `packages/shared/src/models/sse-event.ts` | Ajouter type `SSEAutoShutdownEvent` et `'auto-shutdown'` à `SSEEventType` |
+| `packages/shared/src/index.ts` | Exporter les nouveaux types |
 
-// 2. Pas de dépendant downstream actif
-const dependents = getDownstreamLogicalDependents(db, serviceId);
-const activeDependents = dependents.filter(d => {
-  const svc = db.select().from(services).where(eq(services.id, d.nodeId)).get();
-  return svc && svc.status === 'online';
-});
+### Patterns de test (de Story 4.5)
 
-if (activeDependents.length > 0) {
-  // Log: "Arrêt annulé — dépendant actif : [nom]"
-  // Émettre SSE auto-shutdown avec cancelled: true
-  return;
-}
-```
+- **`vi.hoisted()`** obligatoire pour les variables mock utilisées dans `vi.mock()` factory functions
+- **Zustand store reset** : Ajouter `useCascadeStore.setState({ cascades: {} })` en `beforeEach` si applicable
+- **Pas d'imports inutilisés** — `tsc -b` en mode strict échoue en Docker build
+- Tests co-localisés : `foo.ts` à côté de `foo.test.ts` (pas de dossier `__tests__`)
+- Framework : Vitest
 
-### Opération de Logging
+### Conventions de nommage DB
 
-Source : `inactivity-monitor`. Event types :
-- `auto-shutdown` : arrêt déclenché
-- `decision` : arrêt annulé (raison)
-
-```typescript
-db.insert(operationLogs).values({
-  timestamp: new Date(),
-  level: 'info',
-  source: 'inactivity-monitor',
-  message: `Arrêt automatique de ${serviceName} après ${timeoutMinutes} minutes d'inactivité`,
-  reason: 'inactivity-auto-shutdown',
-  details: JSON.stringify({ serviceId, timeoutMinutes }),
-}).run();
-```
-
-### Lifecycle du Moniteur dans app.ts
-
-```typescript
-// Dans buildApp() ou après app.listen():
-const monitor = createInactivityMonitor(app.db, app.sseManager);
-monitor.start();
-
-// Cleanup au shutdown :
-app.addHook('onClose', async () => {
-  monitor.stop();
-});
-```
-
-**Important** : Le moniteur doit être démarré APRÈS que le serveur soit prêt (pas pendant la phase de register des plugins). Utiliser le hook `onReady` ou démarrer après `app.listen()`.
-
-### Événements SSE
-
-```json
-// Arrêt déclenché
-{
-  "event": "auto-shutdown",
-  "data": {
-    "serviceId": "uuid",
-    "serviceName": "Jellyfin",
-    "inactivityMinutes": 30,
-    "cascadeId": "uuid"
-  }
-}
-
-// Arrêt annulé
-{
-  "event": "auto-shutdown",
-  "data": {
-    "serviceId": "uuid",
-    "serviceName": "VM-Storage",
-    "cancelled": true,
-    "reason": "Dépendant actif : qBittorrent"
-  }
-}
-```
-
-### Anti-patterns à Éviter
-
-- **NE PAS** faire de polling réseau fréquent (ping, HTTP requests) — utiliser `getStatus()` du connecteur qui existe déjà
-- **NE PAS** écrire en DB à chaque tick — le tracking est en mémoire (Map)
-- **NE PAS** lancer une cascade si une est déjà en cours
-- **NE PAS** arrêter un service si un de ses dépendants downstream est actif
-- **NE PAS** créer un dossier `__tests__` séparé — tests co-localisés
-- **NE PAS** utiliser `snake_case` dans le JSON API — utiliser `camelCase`
-- **NE PAS** retourner des réponses API sans le wrapper `{ data }` ou `{ error }`
-
-### Conventions de Nommage Rappel
-
-| Contexte | Convention | Exemple |
-|---|---|---|
-| Table DB | snake_case, pluriel | `inactivity_rules` |
-| Colonnes DB | snake_case | `service_id`, `timeout_minutes`, `is_enabled` |
-| JSON API | camelCase | `serviceId`, `timeoutMinutes`, `isEnabled` |
-| Fichiers | kebab-case | `inactivity-monitor.ts`, `inactivity-rules.routes.ts` |
-| Types TS | PascalCase | `InactivityRule`, `InactivityMonitor` |
-| Constantes | SCREAMING_SNAKE | `DEFAULT_INACTIVITY_TIMEOUT_MINUTES` |
-
-### État Actuel du Projet
-
-- **365 tests** passent (261 backend + 104 frontend)
-- **tsc --noEmit** : zero erreur sur les 2 workspaces
-- **DB** : 7 migrations existantes (`0000` à `0007`)
-- **Prochaine migration** : `0008_inactivity_rules.sql`
-- **Modèle unifié** : tout est un `Service` (physical, proxmox, docker, vm, container)
+| Convention | Exemple |
+|-----------|---------|
+| Table | `inactivity_rules` (snake_case, pluriel) |
+| Colonne | `node_id`, `timeout_minutes`, `is_enabled` |
+| FK pattern | `{table_singular}_id` → `node_id` |
+| Index | `idx_inactivity_rules_node_id` |
+| Drizzle variable | `inactivityRules` (camelCase) |
 
 ### Project Structure Notes
 
-- Le moniteur d'inactivité va dans `apps/server/src/services/inactivity-monitor.ts` (même dossier que cascade-engine.ts et dependency-graph.ts)
-- Les routes API vont dans `apps/server/src/routes/inactivity-rules.routes.ts`
-- La migration va dans `apps/server/drizzle/0008_inactivity_rules.sql` (vérifier le numéro exact — il pourrait y avoir des migrations non-commitées)
+- Le service `inactivity-monitor.ts` rejoint `cascade-engine.ts` et `dependency-graph.ts` dans `apps/server/src/services/`
+- Les routes suivent le pattern existant : `inactivity-rules.routes.ts` dans `apps/server/src/routes/`
+- Les types partagés suivent la séparation `models/` vs `api/` dans `packages/shared/src/`
+- Aucun conflit détecté avec la structure existante
 
 ### References
 
-- [Source: _bmad-output/planning-artifacts/epics.md#Story 5.1]
-- [Source: _bmad-output/planning-artifacts/epics.md#Epic 5]
-- [Source: _bmad-output/planning-artifacts/architecture.md#Implementation Patterns]
-- [Source: _bmad-output/planning-artifacts/prd.md#FR29-FR34]
-- [Source: apps/server/src/db/schema.ts — services.inactivityTimeout existant]
-- [Source: apps/server/src/services/cascade-engine.ts — executeCascadeStop()]
-- [Source: apps/server/src/services/dependency-graph.ts — getDownstreamLogicalDependents()]
-- [Source: apps/server/src/services/connector-factory.ts — createConnectorForNode()]
-- [Source: apps/server/src/sse/sse-manager.ts — broadcast()]
-- [Source: apps/server/src/connectors/connector.interface.ts — PlatformConnector.getStatus()]
-- [Source: _bmad-output/implementation-artifacts/7-5-comportement-uniforme-tous-services.md — patterns et tests count]
+- [Source: _bmad-output/planning-artifacts/epics.md#Epic 5 Story 5.1]
+- [Source: _bmad-output/planning-artifacts/architecture.md#Technical Stack]
+- [Source: _bmad-output/planning-artifacts/architecture.md#Database Schema]
+- [Source: _bmad-output/planning-artifacts/architecture.md#API Patterns]
+- [Source: _bmad-output/planning-artifacts/architecture.md#Testing Standards]
+- [Source: _bmad-output/planning-artifacts/prd.md#Surveillance d'Inactivité]
+- [Source: _bmad-output/planning-artifacts/ux-design-specification.md#Idle/Inactivity Monitoring]
+- [Source: apps/server/src/services/cascade-engine.ts — pattern fonctions exportées, logOperation, CascadeProgressEvent]
+- [Source: apps/server/src/sse/sse-manager.ts — SSEManager.broadcast()]
+- [Source: apps/server/src/db/schema.ts — pattern tables Drizzle, cascades, operationLogs]
+- [Source: apps/server/src/routes/cascades.routes.ts — pattern routes Fastify, fire-and-forget, broadcastCascadeEvent]
+- [Source: apps/server/src/routes/nodes.routes.ts — pattern CRUD, sanitization, PATCH updates]
+- [Source: packages/shared/src/models/sse-event.ts — SSEEventType, pattern événements SSE]
+- [Source: _bmad-output/implementation-artifacts/4-5-servicedetailpanel-et-arret-manuel.md — learnings tests Mantine, vi.hoisted()]
+
+### Intelligence Git (commits récents)
+
+Les 4 derniers commits montrent un pattern de développement par épic/story avec des commits atomiques :
+- `aa247c9` feat: implement Epic 4 (cascade, SSE, dashboard) + code review fixes
+- `699f046` feat: implement stories 2-4 to 3-2
+- `74bf6c5` feat: implement Proxmox & Docker connectors
+- `79382af` feat: implement Story 2.1
+
+Le cascade-engine et le SSE manager sont stables et en production depuis Epic 4.
 
 ## Dev Agent Record
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.6
 
 ### Debug Log References
 
+- Fixed net.Socket mock in tests (class-based mock instead of vi.fn for constructor compatibility)
+- Fixed SQL syntax in route tests (single quotes for string literals in SQLite)
+
 ### Completion Notes List
 
+- Ultimate context engine analysis completed — comprehensive developer guide created
+- Task 1: Table `inactivity_rules` ajoutée au schéma Drizzle avec FK cascade, 2 index, migration 0005 générée
+- Task 2: Types `InactivityRule`, `MonitoringCriteria`, `SSEAutoShutdownEvent` créés dans packages/shared, exportés depuis index.ts
+- Task 3: Service `inactivity-monitor.ts` implémenté — boucle périodique 60s, compteur en mémoire, intégration cascade-engine fire-and-forget, broadcast SSE auto-shutdown, logging operationLogs. Phase 1 : critère `lastAccess` via TCP port 22, stubs pour `networkConnections` et `cpuRamActivity`
+- Task 4: Routes API CRUD (GET/PUT/POST) avec validation JSON Schema Fastify, error handler standard
+- Task 5: Routes enregistrées dans app.ts, moniteur démarré après boot et arrêté dans onClose hook
+- Task 6: 30 tests ajoutés (18 service + 12 routes) — tous passent, 0 régression (309 server tests, 176 web tests)
+
+### Change Log
+
+- 2026-02-13: Implémentation complète Story 5.1 — moteur de surveillance d'inactivité avec boucle périodique, détection d'activité (Phase 1: TCP check), déclenchement cascade stop auto, événements SSE, routes API CRUD, 30 tests unitaires
+- 2026-02-13: Code review — 7 issues corrigées (3 HIGH, 4 MEDIUM) :
+  - H1: Extraction `broadcastCascadeEvent` dans `sse/broadcast-helpers.ts` (élimine duplication avec cascades.routes.ts)
+  - H2: POST /api/inactivity-rules retourne 201 au lieu de 200
+  - H3: Suppression paramètre `_decryptFn` inutilisé dans `checkLastAccess`
+  - M1: Requête N+1 remplacée par un JOIN unique (inactivity_rules ⋈ nodes)
+  - M2: Suppression du double cast `as unknown as Node`, utilisation du type Drizzle natif
+  - M3: Chemins relatifs dans les tests de routes remplacés par `__dirname`-based paths
+  - M4: Protection contre les cascades concurrentes dans `triggerAutoShutdown` + 2 tests ajoutés
+
 ### File List
+
+**Fichiers créés :**
+- `apps/server/src/services/inactivity-monitor.ts` — Service principal de surveillance d'inactivité
+- `apps/server/src/services/inactivity-monitor.test.ts` — Tests unitaires du service (20 tests)
+- `apps/server/src/routes/inactivity-rules.routes.ts` — Routes API CRUD pour les règles
+- `apps/server/src/routes/inactivity-rules.routes.test.ts` — Tests des routes API (12 tests)
+- `apps/server/src/sse/broadcast-helpers.ts` — Helper partagé broadcastCascadeEvent (extrait du code review)
+- `packages/shared/src/models/inactivity-rule.ts` — Types InactivityRule, MonitoringCriteria
+- `packages/shared/src/api/inactivity-rules.ts` — Types API request/response
+- `apps/server/drizzle/0005_complete_arclight.sql` — Migration SQLite pour table inactivity_rules
+
+**Fichiers modifiés :**
+- `apps/server/src/db/schema.ts` — Ajout table `inactivityRules` avec FK, index
+- `apps/server/src/app.ts` — Enregistrement routes + démarrage/arrêt moniteur
+- `apps/server/src/routes/cascades.routes.ts` — Import broadcastCascadeEvent depuis sse/broadcast-helpers.ts (suppression duplication)
+- `packages/shared/src/models/sse-event.ts` — Ajout type `SSEAutoShutdownEvent` et `'auto-shutdown'` à `SSEEventType`
+- `packages/shared/src/index.ts` — Export des nouveaux types inactivity-rule et SSE

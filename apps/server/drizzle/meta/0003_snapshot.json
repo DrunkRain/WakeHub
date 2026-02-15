@@ -1,11 +1,99 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d9c61496-ec00-40a7-bd8b-934db6830162",
-  "prevId": "c3971540-122e-462e-91c3-b602543b1384",
+  "id": "228d2ac2-c50b-476d-bacf-d5214f69f62f",
+  "prevId": "34a6ab88-b192-4ed9-ab97-ac579dffe86e",
   "tables": {
-    "machines": {
-      "name": "machines",
+    "dependency_links": {
+      "name": "dependency_links",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "from_node_id": {
+          "name": "from_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "to_node_id": {
+          "name": "to_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_dependency_links_unique": {
+          "name": "idx_dependency_links_unique",
+          "columns": [
+            "from_node_id",
+            "to_node_id"
+          ],
+          "isUnique": true
+        },
+        "idx_dependency_links_from": {
+          "name": "idx_dependency_links_from",
+          "columns": [
+            "from_node_id"
+          ],
+          "isUnique": false
+        },
+        "idx_dependency_links_to": {
+          "name": "idx_dependency_links_to",
+          "columns": [
+            "to_node_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "dependency_links_from_node_id_nodes_id_fk": {
+          "name": "dependency_links_from_node_id_nodes_id_fk",
+          "tableFrom": "dependency_links",
+          "tableTo": "nodes",
+          "columnsFrom": [
+            "from_node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "dependency_links_to_node_id_nodes_id_fk": {
+          "name": "dependency_links_to_node_id_nodes_id_fk",
+          "tableFrom": "dependency_links",
+          "tableTo": "nodes",
+          "columnsFrom": [
+            "to_node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "nodes": {
+      "name": "nodes",
       "columns": {
         "id": {
           "name": "id",
@@ -28,11 +116,19 @@
           "notNull": true,
           "autoincrement": false
         },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'offline'"
+        },
         "ip_address": {
           "name": "ip_address",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "mac_address": {
@@ -56,15 +152,23 @@
           "notNull": false,
           "autoincrement": false
         },
-        "api_url": {
-          "name": "api_url",
+        "parent_id": {
+          "name": "parent_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "api_credentials_encrypted": {
-          "name": "api_credentials_encrypted",
+        "capabilities": {
+          "name": "capabilities",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "platform_ref": {
+          "name": "platform_ref",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -77,13 +181,37 @@
           "notNull": false,
           "autoincrement": false
         },
-        "status": {
-          "name": "status",
-          "type": "text",
+        "is_pinned": {
+          "name": "is_pinned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "'unknown'"
+          "default": false
+        },
+        "confirm_before_shutdown": {
+          "name": "confirm_before_shutdown",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "discovered": {
+          "name": "discovered",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "configured": {
+          "name": "configured",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
         },
         "created_at": {
           "name": "created_at",
@@ -100,8 +228,44 @@
           "autoincrement": false
         }
       },
-      "indexes": {},
-      "foreignKeys": {},
+      "indexes": {
+        "idx_nodes_parent_id": {
+          "name": "idx_nodes_parent_id",
+          "columns": [
+            "parent_id"
+          ],
+          "isUnique": false
+        },
+        "idx_nodes_type": {
+          "name": "idx_nodes_type",
+          "columns": [
+            "type"
+          ],
+          "isUnique": false
+        },
+        "idx_nodes_status": {
+          "name": "idx_nodes_status",
+          "columns": [
+            "status"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "nodes_parent_id_nodes_id_fk": {
+          "name": "nodes_parent_id_nodes_id_fk",
+          "tableFrom": "nodes",
+          "tableTo": "nodes",
+          "columnsFrom": [
+            "parent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -161,101 +325,6 @@
       },
       "indexes": {},
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "resources": {
-      "name": "resources",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "machine_id": {
-          "name": "machine_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "type": {
-          "name": "type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "platform_ref": {
-          "name": "platform_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'unknown'"
-        },
-        "service_url": {
-          "name": "service_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "inactivity_timeout": {
-          "name": "inactivity_timeout",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "resources_machine_id_machines_id_fk": {
-          "name": "resources_machine_id_machines_id_fk",
-          "tableFrom": "resources",
-          "tableTo": "machines",
-          "columnsFrom": [
-            "machine_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}

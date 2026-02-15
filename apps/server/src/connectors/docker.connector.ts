@@ -1,167 +1,186 @@
-import type { PlatformConnector, DiscoveredResource } from './connector.interface.js';
+import type { Node, NodeStatus, NodeStats, DockerDiscoveredResource } from '@wakehub/shared';
+import type { PlatformConnector } from './connector.interface.js';
+import { DockerClient } from './docker-client.js';
 import { PlatformError } from '../utils/platform-error.js';
 
-export interface DockerConfig {
-  apiUrl: string; // e.g. http://192.168.1.10:2375
-  resourceRef?: { containerId: string };
-}
+const PLATFORM = 'docker';
 
-interface DockerContainer {
+interface DockerContainerListItem {
   Id: string;
   Names: string[];
   Image: string;
   State: string;
   Status: string;
+  Ports: Array<{ IP: string; PrivatePort: number; PublicPort: number; Type: string }>;
 }
 
-interface DockerVersion {
-  Version: string;
-  ApiVersion: string;
+interface DockerContainerInspect {
+  State: {
+    Running: boolean;
+  };
 }
 
-function mapDockerStatus(
-  state: string,
-): 'running' | 'stopped' | 'paused' | 'unknown' | 'error' {
-  switch (state) {
-    case 'running':
-      return 'running';
-    case 'exited':
-    case 'created':
-    case 'removing':
-      return 'stopped';
-    case 'paused':
-      return 'paused';
-    case 'dead':
-      return 'error';
-    case 'restarting':
-      return 'running';
-    default:
-      return 'unknown';
-  }
+interface DockerStatsResponse {
+  cpu_stats: {
+    cpu_usage: { total_usage: number };
+    system_cpu_usage: number;
+    online_cpus: number;
+  };
+  precpu_stats: {
+    cpu_usage: { total_usage: number };
+    system_cpu_usage: number;
+  };
+  memory_stats: {
+    usage: number;
+    limit: number;
+    stats?: { inactive_file?: number };
+  };
+  networks?: Record<string, { rx_bytes: number; tx_bytes: number }>;
 }
 
 export class DockerConnector implements PlatformConnector {
-  constructor(private readonly config: DockerConfig) {}
+  private readonly parentNode: Node;
 
-  private async fetchDocker(
-    path: string,
-    options: { method?: string } = {},
-  ): Promise<unknown> {
-    const url = `${this.config.apiUrl}${path}`;
+  constructor(parentNode: Node) {
+    const dockerCap = parentNode.capabilities?.docker_api;
+    if (!dockerCap) {
+      throw new PlatformError('DOCKER_CONNECTION_FAILED', 'No Docker capability configured on parent node', PLATFORM);
+    }
+    this.parentNode = parentNode;
+  }
 
-    let response: Response;
+  async testConnection(_node: Node): Promise<boolean> {
+    const client = this.createClient();
     try {
-      response = await fetch(url, {
-        method: options.method ?? 'GET',
-      });
-    } catch (err) {
+      return await client.ping();
+    } catch (error) {
+      throw this.wrapError(error, 'testConnection');
+    }
+  }
+
+  async start(node: Node): Promise<void> {
+    const containerId = this.extractContainerId(node);
+    const client = this.createClient();
+    try {
+      await client.post(`/containers/${containerId}/start`);
+    } catch (error) {
       throw new PlatformError(
-        'DOCKER_NETWORK_ERROR',
-        `Impossible de contacter l'hôte Docker : ${(err as Error).message}`,
-        'docker',
-        { url },
+        'DOCKER_START_FAILED',
+        `Impossible de demarrer le conteneur ${node.name}`,
+        PLATFORM,
+        { containerId, cause: (error as Error).message },
       );
     }
+  }
 
-    // Docker returns 204 for successful start/stop, 304 for already in state
-    if (response.status === 204 || response.status === 304) {
-      return null;
-    }
-
-    if (!response.ok) {
-      const body = (await response.json().catch(() => ({ message: response.statusText }))) as {
-        message?: string;
-      };
+  async stop(node: Node): Promise<void> {
+    const containerId = this.extractContainerId(node);
+    const client = this.createClient();
+    try {
+      await client.post(`/containers/${containerId}/stop`);
+    } catch (error) {
       throw new PlatformError(
-        `DOCKER_HTTP_${response.status}`,
-        `Erreur Docker ${response.status} : ${body.message ?? response.statusText}`,
-        'docker',
-        { status: response.status, url, body },
+        'DOCKER_STOP_FAILED',
+        `Impossible d'arreter le conteneur ${node.name}`,
+        PLATFORM,
+        { containerId, cause: (error as Error).message },
       );
     }
-
-    return response.json();
   }
 
-  async testConnection(): Promise<{ success: boolean; message: string }> {
+  async getStatus(node: Node): Promise<NodeStatus> {
+    const containerId = this.extractContainerId(node);
+    const client = this.createClient();
     try {
-      // Step 1: Quick ping
-      const pingUrl = `${this.config.apiUrl}/_ping`;
-      let pingResp: Response;
-      try {
-        pingResp = await fetch(pingUrl);
-      } catch (err) {
-        return {
-          success: false,
-          message: `Impossible de contacter l'hôte Docker : ${(err as Error).message}`,
-        };
-      }
-
-      if (!pingResp.ok) {
-        return {
-          success: false,
-          message: `Docker API non disponible (${pingResp.status})`,
-        };
-      }
-
-      // Step 2: Get version for info
-      const version = (await this.fetchDocker('/version')) as DockerVersion;
-      return {
-        success: true,
-        message: `Connexion Docker réussie (v${version.Version}, API v${version.ApiVersion})`,
-      };
-    } catch (err) {
-      if (err instanceof PlatformError) {
-        return { success: false, message: err.message };
-      }
-      return { success: false, message: `Erreur inattendue : ${(err as Error).message}` };
-    }
-  }
-
-  async listResources(): Promise<DiscoveredResource[]> {
-    const containers = (await this.fetchDocker(
-      '/containers/json?all=true',
-    )) as DockerContainer[];
-
-    return containers.map((c) => ({
-      name: c.Names[0]?.replace(/^\//, '') ?? c.Id.slice(0, 12),
-      type: 'container' as const,
-      platformRef: { containerId: c.Id, image: c.Image },
-      status: mapDockerStatus(c.State),
-    }));
-  }
-
-  async start(): Promise<void> {
-    const ref = this.config.resourceRef;
-    if (!ref) {
-      throw new PlatformError('DOCKER_NO_REF', 'resourceRef requis pour start', 'docker');
-    }
-    await this.fetchDocker(`/containers/${ref.containerId}/start`, { method: 'POST' });
-  }
-
-  async stop(): Promise<void> {
-    const ref = this.config.resourceRef;
-    if (!ref) {
-      throw new PlatformError('DOCKER_NO_REF', 'resourceRef requis pour stop', 'docker');
-    }
-    await this.fetchDocker(`/containers/${ref.containerId}/stop`, { method: 'POST' });
-  }
-
-  async getStatus(): Promise<'online' | 'offline' | 'unknown' | 'error'> {
-    const ref = this.config.resourceRef;
-    if (!ref) return 'unknown';
-
-    try {
-      const data = (await this.fetchDocker(`/containers/${ref.containerId}/json`)) as {
-        State: { Status: string };
-      };
-
-      const s = mapDockerStatus(data.State.Status);
-      if (s === 'running') return 'online';
-      if (s === 'stopped' || s === 'paused') return 'offline';
-      return 'unknown';
+      const data = await client.get<DockerContainerInspect>(`/containers/${containerId}/json`);
+      return data.State.Running ? 'online' : 'offline';
     } catch {
       return 'error';
     }
+  }
+
+  async getStats(node: Node): Promise<NodeStats | null> {
+    const containerId = this.extractContainerId(node);
+    const client = this.createClient();
+    try {
+      const data = await client.get<DockerStatsResponse>(`/containers/${containerId}/stats?stream=false`);
+
+      // Docker CPU usage formula: (delta container / delta system) * number of host CPUs
+      const cpuDelta = data.cpu_stats.cpu_usage.total_usage - data.precpu_stats.cpu_usage.total_usage;
+      const systemDelta = data.cpu_stats.system_cpu_usage - data.precpu_stats.system_cpu_usage;
+      const onlineCpus = data.cpu_stats.online_cpus || 1;
+      const cpuUsage = systemDelta > 0 ? (cpuDelta / systemDelta) * onlineCpus : 0;
+
+      const cacheUsage = data.memory_stats.stats?.inactive_file ?? 0;
+      const ramUsage = data.memory_stats.limit > 0 ? Math.max(0, data.memory_stats.usage - cacheUsage) / data.memory_stats.limit : 0;
+
+      let rxBytes = 0;
+      let txBytes = 0;
+      if (data.networks) {
+        for (const iface of Object.values(data.networks)) {
+          rxBytes += iface.rx_bytes;
+          txBytes += iface.tx_bytes;
+        }
+      }
+
+      return { cpuUsage, ramUsage, rxBytes, txBytes };
+    } catch {
+      return null;
+    }
+  }
+
+  async listResources(): Promise<DockerDiscoveredResource[]> {
+    const client = this.createClient();
+    try {
+      const containers = await client.get<DockerContainerListItem[]>('/containers/json?all=true');
+      return containers.map((c) => ({
+        containerId: c.Id,
+        name: c.Names[0]!.replace(/^\//, ''),
+        image: c.Image,
+        state: c.State,
+        status: c.Status,
+        ports: c.Ports,
+      }));
+    } catch (error) {
+      throw new PlatformError(
+        'DOCKER_DISCOVERY_FAILED',
+        'Impossible de lister les conteneurs Docker',
+        PLATFORM,
+        { cause: (error as Error).message },
+      );
+    }
+  }
+
+  private createClient(): DockerClient {
+    const dockerCap = this.parentNode.capabilities!.docker_api!;
+    return new DockerClient({
+      host: dockerCap.host,
+      port: dockerCap.port,
+      tlsEnabled: dockerCap.tlsEnabled,
+    });
+  }
+
+  private extractContainerId(node: Node): string {
+    const ref = node.platformRef;
+    if (!ref?.platformId || ref.platform !== 'docker') {
+      throw new PlatformError(
+        'DOCKER_CONTAINER_NOT_FOUND',
+        `Missing Docker platformRef on node ${node.id}`,
+        PLATFORM,
+        { nodeId: node.id },
+      );
+    }
+    return ref.platformId;
+  }
+
+  private wrapError(error: unknown, operation: string): PlatformError {
+    const message = (error as Error).message ?? String(error);
+
+    if (message.includes('ECONNREFUSED') || message.includes('ETIMEDOUT') || message.includes('ENOTFOUND')) {
+      const host = this.parentNode.capabilities?.docker_api?.host ?? 'unknown';
+      const port = this.parentNode.capabilities?.docker_api?.port ?? 2375;
+      return new PlatformError('DOCKER_UNREACHABLE', `API Docker injoignable a ${host}:${port}`, PLATFORM, { host, port });
+    }
+    return new PlatformError('DOCKER_API_ERROR', `Erreur API Docker (${operation}): ${message}`, PLATFORM);
   }
 }

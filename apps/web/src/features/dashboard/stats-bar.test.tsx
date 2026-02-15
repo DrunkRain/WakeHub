@@ -1,23 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { theme } from '../../theme/theme';
 import { StatsBar } from './stats-bar';
+import React from 'react';
 
-vi.mock('../../api/cascades.api', () => ({
-  useStats: vi.fn(() => ({
-    data: {
-      data: {
-        activeServices: 3,
-        cascadesToday: 7,
-        avgCascadeTime: 45,
-        inactivityHours: 0,
-      },
-    },
-    isLoading: false,
-    isError: false,
-  })),
+const mockUseStats = vi.hoisted(() => vi.fn());
+vi.mock('../../api/stats.api', () => ({
+  useStats: mockUseStats,
 }));
 
 function renderWithProviders(ui: React.ReactElement) {
@@ -26,36 +16,71 @@ function renderWithProviders(ui: React.ReactElement) {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MantineProvider theme={theme} defaultColorScheme="dark">
-        {ui}
-      </MantineProvider>
+      <MantineProvider>{ui}</MantineProvider>
     </QueryClientProvider>,
   );
 }
 
 describe('StatsBar', () => {
-  it('renders 4 stat tiles', () => {
-    renderWithProviders(<StatsBar />);
-
-    expect(screen.getByText('Services actifs')).toBeInTheDocument();
-    expect(screen.getByText('Cascades aujourd\'hui')).toBeInTheDocument();
-    expect(screen.getByText('Temps moyen')).toBeInTheDocument();
-    expect(screen.getByText('Heures d\'inactivité')).toBeInTheDocument();
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it('displays stat values', () => {
+  it('should render 4 stat tiles with data', () => {
+    mockUseStats.mockReturnValue({
+      data: {
+        data: {
+          nodesOnline: 3,
+          nodesTotal: 5,
+          cascadesToday: 7,
+          avgCascadeDurationMs: 12500,
+        },
+      },
+      isLoading: false,
+    });
+
     renderWithProviders(<StatsBar />);
 
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('Noeuds actifs')).toBeInTheDocument();
+    expect(screen.getByText('3/5')).toBeInTheDocument();
+    expect(screen.getByText('Cascades du jour')).toBeInTheDocument();
     expect(screen.getByText('7')).toBeInTheDocument();
-    expect(screen.getByText('45s')).toBeInTheDocument();
-    expect(screen.getByText('0')).toBeInTheDocument();
+    expect(screen.getByText('Temps moyen cascade')).toBeInTheDocument();
+    expect(screen.getByText('13s')).toBeInTheDocument();
+    expect(screen.getByText("Heures d'inactivité")).toBeInTheDocument();
   });
 
-  it('renders 4 Paper components (bordered cards)', () => {
+  it('should render skeletons when loading', () => {
+    mockUseStats.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+    });
+
+    const { container } = renderWithProviders(<StatsBar />);
+    // Skeletons are rendered as div elements with specific Mantine classes
+    const papers = container.querySelectorAll('[class*="mantine-Paper"]');
+    expect(papers.length).toBe(4);
+  });
+
+  it('should render dash for null avgCascadeDurationMs', () => {
+    mockUseStats.mockReturnValue({
+      data: {
+        data: {
+          nodesOnline: 0,
+          nodesTotal: 0,
+          cascadesToday: 0,
+          avgCascadeDurationMs: null,
+        },
+      },
+      isLoading: false,
+    });
+
     renderWithProviders(<StatsBar />);
 
-    // Mantine may use different class names, so check for the labels instead
-    expect(screen.getAllByText(/Services actifs|Cascades aujourd|Temps moyen|Heures d/)).toHaveLength(4);
+    expect(screen.getByText('0/0')).toBeInTheDocument();
+    expect(screen.getByText('0')).toBeInTheDocument();
+    // "—" is the placeholder for null duration and inactivity hours
+    const dashes = screen.getAllByText('—');
+    expect(dashes.length).toBe(2); // avgDuration + inactivity
   });
 });

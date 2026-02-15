@@ -14,53 +14,31 @@ function renderWithProviders(ui: React.ReactElement, initialRoute = '/') {
 }
 
 describe('Navigation', () => {
-  it('renders all navigation links', () => {
+  it('renders the Accueil navigation link', () => {
     renderWithProviders(<Navigation />);
 
-    expect(screen.getByLabelText('Dashboard')).toBeInTheDocument();
-    expect(screen.getByLabelText('Services')).toBeInTheDocument();
-    expect(screen.getByLabelText('Settings')).toBeInTheDocument();
-    expect(screen.getByLabelText('Logs')).toBeInTheDocument();
+    expect(screen.getByLabelText('Accueil')).toBeInTheDocument();
   });
 
-  it('renders correct href for each link', () => {
+  it('renders correct href for Accueil link', () => {
     renderWithProviders(<Navigation />);
 
-    const dashboardLink = screen.getByLabelText('Dashboard').closest('a');
-    const servicesLink = screen.getByLabelText('Services').closest('a');
-    const settingsLink = screen.getByLabelText('Settings').closest('a');
-    const logsLink = screen.getByLabelText('Logs').closest('a');
-
-    expect(dashboardLink).toHaveAttribute('href', '/');
-    expect(servicesLink).toHaveAttribute('href', '/services');
-    expect(settingsLink).toHaveAttribute('href', '/settings');
-    expect(logsLink).toHaveAttribute('href', '/logs');
+    const accueilLink = screen.getByLabelText('Accueil').closest('a');
+    expect(accueilLink).toHaveAttribute('href', '/');
   });
 
   it('marks the active link with aria-current="page"', () => {
-    renderWithProviders(<Navigation />, '/services');
+    renderWithProviders(<Navigation />, '/');
 
-    const servicesButton = screen.getByLabelText('Services');
-    expect(servicesButton).toHaveAttribute('aria-current', 'page');
+    const accueilButton = screen.getByLabelText('Accueil');
+    expect(accueilButton).toHaveAttribute('aria-current', 'page');
   });
 
-  it('does not mark inactive links with aria-current', () => {
-    renderWithProviders(<Navigation />, '/services');
-
-    const dashboardButton = screen.getByLabelText('Dashboard');
-    const settingsButton = screen.getByLabelText('Settings');
-    const logsButton = screen.getByLabelText('Logs');
-
-    expect(dashboardButton).not.toHaveAttribute('aria-current');
-    expect(settingsButton).not.toHaveAttribute('aria-current');
-    expect(logsButton).not.toHaveAttribute('aria-current');
-  });
-
-  it('renders icons for each navigation item', () => {
+  it('renders icon for the navigation item', () => {
     const { container } = renderWithProviders(<Navigation />);
 
-    // Check that SVG icons are rendered (Tabler icons are SVGs)
+    // Check that SVG icon is rendered (Tabler icons are SVGs)
     const svgs = container.querySelectorAll('svg');
-    expect(svgs.length).toBeGreaterThanOrEqual(4);
+    expect(svgs.length).toBeGreaterThanOrEqual(1);
   });
 });

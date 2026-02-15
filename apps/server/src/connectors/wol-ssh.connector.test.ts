@@ -1,169 +1,173 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { EventEmitter } from 'node:events';
-import { PlatformError } from '../utils/platform-error.js';
+import type { Node } from '@wakehub/shared';
 
-const mockWake = vi.fn();
-let lastSshClient: EventEmitter & {
-  connect: ReturnType<typeof vi.fn>;
-  end: ReturnType<typeof vi.fn>;
-  destroy: ReturnType<typeof vi.fn>;
-  exec: ReturnType<typeof vi.fn>;
-};
+const { mockConnect, mockDispose, mockExecCommand, mockWake } = vi.hoisted(() => ({
+  mockConnect: vi.fn(),
+  mockDispose: vi.fn(),
+  mockExecCommand: vi.fn(),
+  mockWake: vi.fn(),
+}));
 
-vi.mock('ssh2', () => {
-  const { EventEmitter: EE } = require('node:events');
-  return {
-    Client: class extends EE {
-      connect = vi.fn();
-      end = vi.fn();
-      destroy = vi.fn();
-      exec = vi.fn();
-      constructor() {
-        super();
-        // Store reference to latest instance for test assertions
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (globalThis as any).__lastSshClient = this;
-      }
-    },
-  };
-});
+vi.mock('node-ssh', () => ({
+  NodeSSH: class {
+    connect = mockConnect;
+    dispose = mockDispose;
+    execCommand = mockExecCommand;
+  },
+}));
 
 vi.mock('wake_on_lan', () => ({
   default: { wake: mockWake },
 }));
 
-const { WolSshConnector } = await import('./wol-ssh.connector.js');
+import { WolSshConnector } from './wol-ssh.connector.js';
+import { PlatformError } from '../utils/platform-error.js';
 
-function getLastClient() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (globalThis as any).__lastSshClient as typeof lastSshClient;
+function makeNode(overrides: Partial<Node> = {}): Node {
+  return {
+    id: 'node-1',
+    name: 'Test Server',
+    type: 'physical',
+    status: 'offline',
+    ipAddress: '192.168.1.10',
+    macAddress: 'AA:BB:CC:DD:EE:FF',
+    sshUser: 'root',
+    sshCredentialsEncrypted: 'decrypted-password',
+    parentId: null,
+    capabilities: null,
+    platformRef: null,
+    serviceUrl: null,
+    isPinned: false,
+    confirmBeforeShutdown: true,
+    discovered: false,
+    configured: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
 }
 
-const TEST_CONFIG = {
-  host: '192.168.1.100',
-  macAddress: 'AA:BB:CC:DD:EE:FF',
-  sshUser: 'admin',
-  sshPassword: 'secret',
-};
-
 describe('WolSshConnector', () => {
-  let connector: InstanceType<typeof WolSshConnector>;
+  let connector: WolSshConnector;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    connector = new WolSshConnector(TEST_CONFIG);
+    connector = new WolSshConnector();
   });
 
-  describe('testConnection()', () => {
-    it('returns success when SSH connects', async () => {
-      const promise = connector.testConnection();
-      const client = getLastClient();
-      client.connect.mockImplementation(() => {});
-      client.emit('ready');
-      const result = await promise;
-      expect(result.success).toBe(true);
-      expect(result.message).toContain('réussie');
-    });
+  describe('testConnection', () => {
+    it('should return true when SSH connection succeeds', async () => {
+      mockConnect.mockResolvedValue(undefined);
+      const node = makeNode();
 
-    it('returns failure when SSH errors', async () => {
-      const promise = connector.testConnection();
-      const client = getLastClient();
-      client.emit('error', new Error('Connection refused'));
-      const result = await promise;
-      expect(result.success).toBe(false);
-      expect(result.message).toContain('Connection refused');
-    });
-  });
+      const result = await connector.testConnection(node);
 
-  describe('start()', () => {
-    it('calls wol.wake with correct MAC address', async () => {
-      mockWake.mockImplementation(
-        (_mac: string, _opts: unknown, cb: (err: Error | undefined) => void) => {
-          cb(undefined);
-        },
-      );
-
-      await connector.start();
-      expect(mockWake).toHaveBeenCalledWith(
-        'AA:BB:CC:DD:EE:FF',
-        { address: '255.255.255.255' },
-        expect.any(Function),
-      );
-    });
-
-    it('throws PlatformError when wol.wake fails', async () => {
-      mockWake.mockImplementation(
-        (_mac: string, _opts: unknown, cb: (err: Error | undefined) => void) => {
-          cb(new Error('Network unreachable'));
-        },
-      );
-
-      await expect(connector.start()).rejects.toThrow(PlatformError);
-    });
-
-    it('PlatformError has correct code and platform', async () => {
-      mockWake.mockImplementation(
-        (_mac: string, _opts: unknown, cb: (err: Error | undefined) => void) => {
-          cb(new Error('Network unreachable'));
-        },
-      );
-
-      try {
-        await connector.start();
-        expect.fail('Should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(PlatformError);
-        expect((err as PlatformError).code).toBe('WOL_SEND_FAILED');
-        expect((err as PlatformError).platform).toBe('wol-ssh');
-      }
-    });
-  });
-
-  describe('stop()', () => {
-    it('executes SSH shutdown command', async () => {
-      const promise = connector.stop();
-      const client = getLastClient();
-      client.exec.mockImplementation((_cmd: string, cb: (err: Error | null) => void) => {
-        cb(null);
-        setTimeout(() => client.emit('close'), 10);
+      expect(result).toBe(true);
+      expect(mockConnect).toHaveBeenCalledWith({
+        host: '192.168.1.10',
+        username: 'root',
+        password: 'decrypted-password',
+        readyTimeout: 10_000,
       });
-      client.emit('ready');
-
-      await promise;
-      expect(client.exec).toHaveBeenCalledWith('sudo shutdown -h now', expect.any(Function));
+      expect(mockDispose).toHaveBeenCalled();
     });
 
-    it('throws PlatformError when SSH connection fails', async () => {
-      const promise = connector.stop();
-      const client = getLastClient();
-      client.emit('error', new Error('Connection refused'));
+    it('should throw PlatformError when SSH connection fails', async () => {
+      mockConnect.mockRejectedValue(new Error('Connection refused'));
+      const node = makeNode();
 
-      try {
-        await promise;
-        expect.fail('Should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(PlatformError);
-        expect((err as PlatformError).code).toBe('SSH_CONNECTION_FAILED');
-        expect((err as PlatformError).platform).toBe('wol-ssh');
-      }
+      await expect(connector.testConnection(node)).rejects.toThrow(PlatformError);
+      await expect(connector.testConnection(node)).rejects.toMatchObject({
+        code: 'SSH_CONNECTION_FAILED',
+        platform: 'wol-ssh',
+      });
+    });
+
+    it('should throw PlatformError when IP is missing', async () => {
+      const node = makeNode({ ipAddress: null });
+
+      await expect(connector.testConnection(node)).rejects.toThrow(PlatformError);
+      await expect(connector.testConnection(node)).rejects.toMatchObject({
+        code: 'SSH_CONNECTION_FAILED',
+      });
+    });
+
+    it('should throw PlatformError when SSH user is missing', async () => {
+      const node = makeNode({ sshUser: null });
+
+      await expect(connector.testConnection(node)).rejects.toThrow(PlatformError);
     });
   });
 
-  describe('getStatus()', () => {
-    it('returns online when SSH connects', async () => {
-      const promise = connector.getStatus();
-      const client = getLastClient();
-      client.emit('ready');
-      const status = await promise;
-      expect(status).toBe('online');
+  describe('start', () => {
+    it('should send WoL magic packet', async () => {
+      mockWake.mockImplementation((_mac: string, cb: (err?: Error) => void) => cb());
+      const node = makeNode();
+
+      await connector.start(node);
+
+      expect(mockWake).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF', expect.any(Function));
     });
 
-    it('returns offline when SSH errors', async () => {
-      const promise = connector.getStatus();
-      const client = getLastClient();
-      client.emit('error', new Error('timeout'));
-      const status = await promise;
-      expect(status).toBe('offline');
+    it('should throw PlatformError when MAC address is missing', async () => {
+      const node = makeNode({ macAddress: null });
+
+      await expect(connector.start(node)).rejects.toThrow(PlatformError);
+      await expect(connector.start(node)).rejects.toMatchObject({
+        code: 'WOL_SEND_FAILED',
+      });
+    });
+
+    it('should throw PlatformError when WoL fails', async () => {
+      mockWake.mockImplementation((_mac: string, cb: (err?: Error) => void) =>
+        cb(new Error('Network error')),
+      );
+      const node = makeNode();
+
+      await expect(connector.start(node)).rejects.toThrow(PlatformError);
+      await expect(connector.start(node)).rejects.toMatchObject({
+        code: 'WOL_SEND_FAILED',
+      });
+    });
+  });
+
+  describe('stop', () => {
+    it('should execute shutdown command via SSH', async () => {
+      mockConnect.mockResolvedValue(undefined);
+      mockExecCommand.mockResolvedValue({ stdout: '', stderr: '' });
+      const node = makeNode();
+
+      await connector.stop(node);
+
+      expect(mockConnect).toHaveBeenCalled();
+      expect(mockExecCommand).toHaveBeenCalledWith('sudo shutdown -h now');
+      expect(mockDispose).toHaveBeenCalled();
+    });
+
+    it('should throw PlatformError when SSH fails during stop', async () => {
+      mockConnect.mockRejectedValue(new Error('Auth failed'));
+      const node = makeNode();
+
+      await expect(connector.stop(node)).rejects.toThrow(PlatformError);
+      await expect(connector.stop(node)).rejects.toMatchObject({
+        code: 'SSH_COMMAND_FAILED',
+      });
+    });
+
+    it('should throw PlatformError when IP or user is missing for stop', async () => {
+      const node = makeNode({ sshUser: null });
+
+      await expect(connector.stop(node)).rejects.toThrow(PlatformError);
+    });
+  });
+
+  describe('getStatus', () => {
+    it('should return error when IP is missing', async () => {
+      const node = makeNode({ ipAddress: null });
+
+      const status = await connector.getStatus(node);
+
+      expect(status).toBe('error');
     });
   });
 });

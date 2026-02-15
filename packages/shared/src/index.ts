@@ -12,136 +12,94 @@ export interface ApiError {
 
 export type ApiResult<T> = ApiResponse<T> | ApiError;
 
-export type ServiceType = 'physical' | 'proxmox' | 'docker' | 'vm' | 'container';
+// Node models
+export type {
+  Node,
+  NodeType,
+  NodeStatus,
+  NodeCapabilities,
+  ProxmoxCapability,
+  DockerCapability,
+  PlatformRef,
+} from './models/node.js';
 
-export type ServiceStatus = 'online' | 'offline' | 'running' | 'stopped' | 'paused' | 'unknown' | 'error';
+// Node API types
+export type {
+  CreateNodeRequest,
+  UpdateNodeRequest,
+  ConfigureProxmoxRequest,
+  ConfigureDockerRequest,
+  DiscoveredResource,
+  DockerDiscoveredResource,
+  TestConnectionResponse,
+  NodeListResponse,
+  NodeResponse,
+} from './api/nodes.js';
 
-export interface Service {
-  id: string;
-  name: string;
-  type: ServiceType;
-  ipAddress: string | null;
-  macAddress: string | null;
-  sshUser: string | null;
-  apiUrl: string | null;
-  serviceUrl: string | null;
-  status: ServiceStatus;
-  platformRef: PlatformRef | null;
-  inactivityTimeout: number | null;
-  parentId: string | null;
-  pinnedToDashboard: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
+// Dependency models
+export type {
+  DependencyLink,
+  CreateDependencyRequest,
+  DependencyNodeInfo,
+  DependencyChain,
+} from './models/dependency.js';
 
-export interface ProxmoxPlatformRef {
-  node: string;
-  vmid: number;
-}
+// Dependency API types
+export type {
+  CreateDependencyResponse,
+  DependenciesQueryResponse,
+  DeleteDependencyResponse,
+  DependencyGraphNode,
+  DependencyGraphLink,
+  DependencyGraphResponse,
+} from './api/dependencies.js';
 
-export interface DockerPlatformRef {
-  containerId: string;
-  image: string;
-}
+// Cascade models
+export type {
+  Cascade,
+  CascadeType,
+  CascadeStatus,
+} from './models/cascade.js';
 
-export type PlatformRef = ProxmoxPlatformRef | DockerPlatformRef | Record<string, unknown>;
+// Cascade API types
+export type {
+  StartCascadeRequest,
+  StopCascadeRequest,
+  CascadeResponse,
+  CascadeDetailResponse,
+} from './api/cascades.js';
 
-export type DependencyNodeType = 'service';
+// SSE event types
+export type {
+  SSEEventType,
+  SSEStatusChangeEvent,
+  SSECascadeProgressEvent,
+  SSECascadeCompleteEvent,
+  SSECascadeErrorEvent,
+  SSEAutoShutdownEvent,
+  SSEEvent,
+} from './models/sse-event.js';
 
-export interface DependencyLink {
-  id: string;
-  parentType: DependencyNodeType;
-  parentId: string;
-  childType: DependencyNodeType;
-  childId: string;
-  isShared: boolean;
-  isStructural: boolean;
-  createdAt: string;
-}
+// Node stats
+export type { NodeStats } from './models/node-stats.js';
 
-export interface DependencyChainNode {
-  nodeType: DependencyNodeType;
-  nodeId: string;
-  name: string;
-  status: string;
-}
+// Inactivity rule models
+export type {
+  InactivityRule,
+  MonitoringCriteria,
+} from './models/inactivity-rule.js';
 
-export interface GraphNode {
-  id: string;
-  name: string;
-  nodeType: DependencyNodeType;
-  subType: string;
-  status: string;
-  isShared: boolean;
-}
+// Operation log models
+export type {
+  OperationLog,
+  OperationLogLevel,
+  OperationLogEventType,
+} from './models/operation-log.js';
 
-export interface GraphEdge {
-  id: string;
-  source: string;
-  target: string;
-  isShared: boolean;
-}
-
-// === SSE Event Types ===
-
-export type SSEEventType = 'status-change' | 'cascade-progress' | 'cascade-complete' | 'cascade-error';
-
-export interface StatusChangeEvent {
-  serviceId: string;
-  status: string;
-  timestamp: string; // ISO 8601
-}
-
-export interface CascadeProgressEvent {
-  cascadeId: string;
-  serviceId: string;
-  step: number;
-  totalSteps: number;
-  currentDependency: {
-    id: string;
-    name: string;
-    status: string;
-  };
-}
-
-export interface CascadeCompleteEvent {
-  cascadeId: string;
-  serviceId: string;
-  success: true;
-}
-
-export interface CascadeErrorEvent {
-  cascadeId: string;
-  serviceId: string;
-  failedStep: number;
-  error: {
-    code: string;
-    message: string;
-  };
-}
-
-export type SSEEventData =
-  | { event: 'status-change'; data: StatusChangeEvent }
-  | { event: 'cascade-progress'; data: CascadeProgressEvent }
-  | { event: 'cascade-complete'; data: CascadeCompleteEvent }
-  | { event: 'cascade-error'; data: CascadeErrorEvent };
-
-// === Cascade Types ===
-
-export type CascadeType = 'start' | 'stop';
-
-export type CascadeStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
-
-export interface CascadeRecord {
-  id: string;
-  serviceId: string;
-  type: CascadeType;
-  status: CascadeStatus;
-  currentStep: number;
-  totalSteps: number;
-  failedStep: number | null;
-  errorCode: string | null;
-  errorMessage: string | null;
-  startedAt: string;
-  completedAt: string | null;
-}
+// Inactivity rule API types
+export type {
+  InactivityRuleResponse,
+  InactivityRuleListResponse,
+  CreateInactivityRuleRequest,
+  UpdateInactivityRuleRequest,
+} from './api/inactivity-rules.js';

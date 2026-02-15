@@ -1,193 +1,86 @@
-import { createElement, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { notifications } from '@mantine/notifications';
-import { IconCheck, IconX, IconAlertTriangle } from '@tabler/icons-react';
-import { getAuthToken } from '../api/auth-token';
-import type { CascadeProgressData } from '../api/cascades.api';
-import type {
-  CascadeProgressEvent,
-  CascadeCompleteEvent,
-  CascadeErrorEvent,
-  CascadeRecord,
-  Service,
-} from '@wakehub/shared';
+import { useCascadeStore } from '../stores/cascade.store';
+import type { SSECascadeProgressEvent, SSECascadeCompleteEvent, SSECascadeErrorEvent } from '@wakehub/shared';
 
-/**
- * Establishes an SSE connection to /api/events and invalidates
- * relevant TanStack Query caches when server-sent events arrive.
- * Also parses cascade events to store real-time progress data
- * and show toast notifications.
- *
- * Must be called once inside an authenticated context.
- */
+const SSE_URL = '/api/events';
+
 export function useSSE() {
   const queryClient = useQueryClient();
-  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
-    const token = getAuthToken();
-    const url = token
-      ? `/api/events?token=${encodeURIComponent(token)}`
-      : '/api/events';
-    const es = new EventSource(url, { withCredentials: true });
+    const es = new EventSource(SSE_URL, { withCredentials: true });
+    esRef.current = es;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    es.onerror = () => {
+      // EventSource reconnects automatically; invalidate to re-sync state
+      queryClient.invalidateQueries({ queryKey: ['nodes'] });
+    };
 
     es.addEventListener('status-change', () => {
-      queryClient.invalidateQueries({ queryKey: ['services'] });
-      queryClient.invalidateQueries({ queryKey: ['stats'] });
+      queryClient.invalidateQueries({ queryKey: ['nodes'] });
     });
 
     es.addEventListener('cascade-progress', (event: MessageEvent) => {
-      queryClient.invalidateQueries({ queryKey: ['cascade'] });
-
-      try {
-        const data = JSON.parse(event.data) as CascadeProgressEvent;
-        const progressData: CascadeProgressData = {
-          cascadeId: data.cascadeId,
-          serviceId: data.serviceId,
-          step: data.step,
-          totalSteps: data.totalSteps,
-          currentDependency: data.currentDependency,
-          status: 'in_progress',
-        };
-        queryClient.setQueryData(
-          ['cascade', 'progress', data.serviceId],
-          progressData,
-        );
-
-        // Toast warning for skipped shared dependencies
-        if (data.currentDependency?.status === 'skipped-shared') {
-          notifications.show({
-            title: `Arrêt de ${data.currentDependency.name} annulé`,
-            message: 'Dépendance partagée active',
-            color: 'orange',
-            icon: createElement(IconAlertTriangle, { size: 16 }),
-            autoClose: 5000,
-          });
-        }
-      } catch {
-        // Ignore parse errors — invalidation still works
-      }
+      queryClient.invalidateQueries({ queryKey: ['cascades'] });
+      let data: SSECascadeProgressEvent;
+      try { data = JSON.parse(event.data); } catch { return; }
+      useCascadeStore.getState().updateProgress(data.nodeId, {
+        cascadeId: data.cascadeId,
+        step: data.step,
+        totalSteps: data.totalSteps,
+        currentNodeId: data.currentNodeId,
+        currentNodeName: data.currentNodeName,
+      });
     });
 
     es.addEventListener('cascade-complete', (event: MessageEvent) => {
-      try {
-        const data = JSON.parse(event.data) as CascadeCompleteEvent;
+      queryClient.invalidateQueries({ queryKey: ['cascades'] });
+      queryClient.invalidateQueries({ queryKey: ['nodes'] });
+      let data: SSECascadeCompleteEvent;
+      try { data = JSON.parse(event.data); } catch { return; }
+      useCascadeStore.getState().completeCascade(data.nodeId);
 
-        // Get previous progress to know totalSteps
-        const prev = queryClient.getQueryData<CascadeProgressData>(
-          ['cascade', 'progress', data.serviceId],
-        );
-        const totalSteps = prev?.totalSteps ?? 1;
+      // Lookup node name from TanStack Query cache
+      const nodesCache = queryClient.getQueryData<{ data?: { nodes?: Array<{ id: string; name: string }> } }>(['nodes']);
+      const nodeName = nodesCache?.data?.nodes?.find((n) => n.id === data.nodeId)?.name ?? data.nodeId;
 
-        // Store completed state for 1.5s green flash
-        const completedData: CascadeProgressData = {
-          cascadeId: data.cascadeId,
-          serviceId: data.serviceId,
-          step: totalSteps,
-          totalSteps,
-          currentDependency: null,
-          status: 'completed',
-        };
-        queryClient.setQueryData(
-          ['cascade', 'progress', data.serviceId],
-          completedData,
-        );
+      notifications.show({
+        title: 'Cascade terminée',
+        message: `✓ ${nodeName} démarré avec succès`,
+        color: 'green',
+        autoClose: 5000,
+      });
 
-        // Clean up after 1.5s
-        const timerId = setTimeout(() => {
-          queryClient.removeQueries({
-            queryKey: ['cascade', 'progress', data.serviceId],
-          });
-          timersRef.current.delete(timerId);
-        }, 1500);
-        timersRef.current.add(timerId);
-
-        // Toast success — look up service name and cascade type from cache
-        const serviceName = getServiceName(queryClient, data.serviceId);
-        const cascadeType = getCascadeType(queryClient, data.cascadeId);
-        const isStop = cascadeType === 'stop';
-        notifications.show({
-          title: isStop
-            ? `${serviceName} arrêté avec succès`
-            : `${serviceName} démarré avec succès`,
-          message: '',
-          color: 'green',
-          icon: createElement(IconCheck, { size: 16 }),
-          autoClose: 5000,
-        });
-      } catch {
-        // Ignore parse errors
-      }
-
-      queryClient.invalidateQueries({ queryKey: ['cascade'] });
-      queryClient.invalidateQueries({ queryKey: ['services'] });
-      queryClient.invalidateQueries({ queryKey: ['stats'] });
+      timers.push(setTimeout(() => useCascadeStore.getState().clearCascade(data.nodeId), 2000));
     });
 
     es.addEventListener('cascade-error', (event: MessageEvent) => {
-      try {
-        const data = JSON.parse(event.data) as CascadeErrorEvent;
+      queryClient.invalidateQueries({ queryKey: ['cascades'] });
+      queryClient.invalidateQueries({ queryKey: ['nodes'] });
+      let data: SSECascadeErrorEvent;
+      try { data = JSON.parse(event.data); } catch { return; }
+      const store = useCascadeStore.getState();
+      const current = store.cascades[data.nodeId];
+      store.failCascade(data.nodeId, current?.currentNodeName);
 
-        // Get previous progress to preserve step info
-        const prev = queryClient.getQueryData<CascadeProgressData>(
-          ['cascade', 'progress', data.serviceId],
-        );
+      notifications.show({
+        title: 'Échec de cascade',
+        message: `✗ Échec : ${data.error?.message || 'Erreur inconnue'}`,
+        color: 'red',
+        autoClose: 5000,
+      });
 
-        const failedData: CascadeProgressData = {
-          cascadeId: data.cascadeId,
-          serviceId: data.serviceId,
-          step: data.failedStep,
-          totalSteps: prev?.totalSteps ?? 1,
-          currentDependency: prev?.currentDependency ?? null,
-          status: 'failed',
-        };
-        queryClient.setQueryData(
-          ['cascade', 'progress', data.serviceId],
-          failedData,
-        );
-
-        // Toast error — detect stop vs start
-        const errorCascadeType = getCascadeType(queryClient, data.cascadeId);
-        const isStopError = errorCascadeType === 'stop';
-        notifications.show({
-          title: isStopError ? "Échec de l'arrêt" : 'Échec du démarrage',
-          message: data.error.message,
-          color: 'red',
-          icon: createElement(IconX, { size: 16 }),
-          autoClose: 5000,
-        });
-      } catch {
-        // Ignore parse errors
-      }
-
-      queryClient.invalidateQueries({ queryKey: ['cascade'] });
-      queryClient.invalidateQueries({ queryKey: ['stats'] });
+      timers.push(setTimeout(() => useCascadeStore.getState().clearCascade(data.nodeId), 2000));
     });
 
     return () => {
       es.close();
-      timersRef.current.forEach(clearTimeout);
-      timersRef.current.clear();
+      esRef.current = null;
+      timers.forEach(clearTimeout);
     };
   }, [queryClient]);
-}
-
-/** Look up a service name from the TanStack Query cache */
-function getServiceName(
-  queryClient: ReturnType<typeof useQueryClient>,
-  serviceId: string,
-): string {
-  const servicesData = queryClient.getQueryData<{ data: Service[] }>(['services']);
-  const service = servicesData?.data?.find((s) => s.id === serviceId);
-  return service?.name ?? 'Service';
-}
-
-/** Look up the cascade type (start/stop) from the TanStack Query cache */
-function getCascadeType(
-  queryClient: ReturnType<typeof useQueryClient>,
-  cascadeId: string,
-): string | undefined {
-  const cascadesData = queryClient.getQueryData<{ data: CascadeRecord[] }>(['cascade', 'active']);
-  const cascade = cascadesData?.data?.find((c) => c.id === cascadeId);
-  return cascade?.type;
 }

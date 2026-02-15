@@ -1,60 +1,65 @@
-import { Progress, Text } from '@mantine/core';
-import { IconLoader2, IconCheck, IconX } from '@tabler/icons-react';
-import classes from './cascade-progress.module.css';
+import { Group, Progress, Text, Transition } from '@mantine/core';
+import { NodeTypeIcon } from '../../components/shared/node-type-icon';
+import type { NodeType } from '@wakehub/shared';
 
 export interface CascadeProgressProps {
-  currentStep: number;
+  step: number;
   totalSteps: number;
-  currentDependencyName?: string;
+  currentNodeName?: string;
+  currentNodeType?: string;
   status: 'in_progress' | 'completed' | 'failed';
+  errorNodeName?: string;
+}
+
+function getBarColor(status: CascadeProgressProps['status']): string {
+  switch (status) {
+    case 'completed':
+      return 'green.5';
+    case 'failed':
+      return 'red.5';
+    default:
+      return 'blue.4';
+  }
 }
 
 export function CascadeProgress({
-  currentStep,
+  step,
   totalSteps,
-  currentDependencyName,
+  currentNodeName,
+  currentNodeType,
   status,
+  errorNodeName,
 }: CascadeProgressProps) {
-  const percent = totalSteps > 0 ? Math.round((currentStep / totalSteps) * 100) : 0;
-  const displayPercent = status === 'completed' ? 100 : percent;
-  const color = status === 'completed' ? 'green' : status === 'failed' ? 'red' : 'blue';
-
-  const ariaLabel = currentDependencyName
-    ? `Démarrage en cours — étape ${currentStep} sur ${totalSteps} : ${currentDependencyName}`
-    : `Démarrage en cours — étape ${currentStep} sur ${totalSteps}`;
+  const percent = totalSteps > 0 ? (step / totalSteps) * 100 : 0;
 
   return (
     <>
       <div aria-live="polite">
-        {status === 'in_progress' && currentDependencyName && (
-          <Text key={currentDependencyName} size="xs" c="dimmed" className={classes.dependencyName}>
-            <IconLoader2 size={12} className={classes.spinIcon} />
-            {currentDependencyName}
-          </Text>
-        )}
-        {status === 'completed' && (
-          <Text size="xs" c="green" className={classes.dependencyName}>
-            <IconCheck size={12} />
-            Terminé
-          </Text>
-        )}
-        {status === 'failed' && currentDependencyName && (
-          <Text size="xs" c="red" className={classes.dependencyName}>
-            <IconX size={12} />
-            {currentDependencyName}
+        <Transition mounted={!!currentNodeName && status === 'in_progress'} transition="fade" duration={200}>
+          {(styles) => (
+            <Group gap="xs" style={styles} mt="xs">
+              {currentNodeType && (
+                <NodeTypeIcon type={currentNodeType as NodeType} size={16} />
+              )}
+              <Text size="sm" c="dimmed">{currentNodeName}</Text>
+            </Group>
+          )}
+        </Transition>
+
+        {status === 'failed' && errorNodeName && (
+          <Text size="sm" c="red.5" mt={4}>
+            Échec : {errorNodeName}
           </Text>
         )}
       </div>
-      <div className={classes.progressWrapper}>
-        <Progress.Root size={3}>
-          <Progress.Section
-            value={displayPercent}
-            color={color}
-            aria-valuenow={displayPercent}
-            aria-label={ariaLabel}
-          />
-        </Progress.Root>
-      </div>
+
+      <Progress
+        value={percent}
+        size={3}
+        radius={0}
+        color={getBarColor(status)}
+        mt="xs"
+      />
     </>
   );
 }

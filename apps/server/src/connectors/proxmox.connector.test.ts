@@ -1,422 +1,387 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
+import type { Node, DiscoveredResource } from '@wakehub/shared';
+
+const { mockGet, mockPost, mockDestroy } = vi.hoisted(() => ({
+  mockGet: vi.fn(),
+  mockPost: vi.fn(),
+  mockDestroy: vi.fn(),
+}));
+
+vi.mock('./proxmox-client.js', () => ({
+  ProxmoxClient: class {
+    get = mockGet;
+    post = mockPost;
+    destroy = mockDestroy;
+  },
+}));
+
+import { ProxmoxConnector } from './proxmox.connector.js';
 import { PlatformError } from '../utils/platform-error.js';
 
-// Mock fetch globally before importing the connector
-const mockFetch = vi.fn();
-vi.stubGlobal('fetch', mockFetch);
-
-// Dynamic import after mocking
-const { ProxmoxConnector } = await import('./proxmox.connector.js');
-
-function jsonResponse(data: unknown, status = 200) {
-  return Promise.resolve({
-    ok: status >= 200 && status < 300,
-    status,
-    statusText: status === 200 ? 'OK' : 'Error',
-    json: () => Promise.resolve({ data }),
-    text: () => Promise.resolve(JSON.stringify({ data })),
-  } as unknown as Response);
+function makeParentNode(overrides: Partial<Node> = {}): Node {
+  return {
+    id: 'parent-1',
+    name: 'Proxmox Server',
+    type: 'physical',
+    status: 'online',
+    ipAddress: '192.168.1.100',
+    macAddress: 'AA:BB:CC:DD:EE:FF',
+    sshUser: 'root',
+    sshCredentialsEncrypted: null,
+    parentId: null,
+    capabilities: {
+      proxmox_api: {
+        host: '192.168.1.100',
+        port: 8006,
+        authType: 'token',
+        tokenId: 'root@pam!monitoring',
+        tokenSecretEncrypted: 'encrypted-secret',
+        verifySsl: false,
+      },
+    },
+    platformRef: null,
+    serviceUrl: null,
+    isPinned: false,
+    confirmBeforeShutdown: false,
+    discovered: false,
+    configured: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
 }
 
-function errorResponse(status: number, body = '') {
-  return Promise.resolve({
-    ok: false,
-    status,
-    statusText: 'Error',
-    json: () => Promise.resolve({}),
-    text: () => Promise.resolve(body),
-  } as unknown as Response);
+function makeVmNode(overrides: Partial<Node> = {}): Node {
+  return {
+    id: 'vm-1',
+    name: 'ubuntu-server',
+    type: 'vm',
+    status: 'offline',
+    ipAddress: null,
+    macAddress: null,
+    sshUser: null,
+    sshCredentialsEncrypted: null,
+    parentId: 'parent-1',
+    capabilities: null,
+    platformRef: { platform: 'proxmox', platformId: 'pve1/100', node: 'pve1', vmid: 100, type: 'qemu' },
+    serviceUrl: null,
+    isPinned: false,
+    confirmBeforeShutdown: false,
+    discovered: true,
+    configured: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
+function makeLxcNode(overrides: Partial<Node> = {}): Node {
+  return {
+    ...makeVmNode(),
+    id: 'lxc-1',
+    name: 'nginx-proxy',
+    type: 'lxc',
+    platformRef: { platform: 'proxmox', platformId: 'pve1/200', node: 'pve1', vmid: 200, type: 'lxc' },
+    ...overrides,
+  };
 }
 
 describe('ProxmoxConnector', () => {
+  let connector: ProxmoxConnector;
+  const parentNode = makeParentNode();
+
   beforeEach(() => {
-    mockFetch.mockReset();
+    vi.clearAllMocks();
+    connector = new ProxmoxConnector(parentNode, (encrypted: string) => `decrypted(${encrypted})`);
   });
 
-  describe('testConnection — token auth', () => {
-    it('succeeds when GET /nodes returns OK', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!token',
-        tokenSecret: 'secret-uuid',
-      });
+  describe('testConnection', () => {
+    it('should return true when GET /nodes succeeds', async () => {
+      mockGet.mockResolvedValueOnce([{ node: 'pve1', status: 'online' }]);
+      const node = makeVmNode();
 
-      mockFetch.mockReturnValueOnce(jsonResponse([{ node: 'pve1' }]));
+      const result = await connector.testConnection(node);
 
-      const result = await connector.testConnection();
-      expect(result.success).toBe(true);
-      expect(result.message).toContain('API token');
-
-      // Verify Authorization header
-      const call = mockFetch.mock.calls[0]!;
-      expect(call[0]).toBe('https://pve:8006/api2/json/nodes');
-      expect(call[1].headers['Authorization']).toContain('PVEAPIToken=');
+      expect(result).toBe(true);
+      expect(mockGet).toHaveBeenCalledWith('/nodes');
+      expect(mockDestroy).toHaveBeenCalled();
     });
 
-    it('returns failure on 401', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!token',
-        tokenSecret: 'bad-secret',
-      });
+    it('should throw PlatformError on connection failure', async () => {
+      mockGet.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
+      const node = makeVmNode();
 
-      mockFetch.mockReturnValueOnce(errorResponse(401, 'authentication failure'));
-
-      const result = await connector.testConnection();
-      expect(result.success).toBe(false);
-      expect(result.message).toContain('401');
+      try {
+        await connector.testConnection(node);
+        expect.unreachable('should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError);
+        expect(error).toMatchObject({ code: 'PROXMOX_UNREACHABLE', platform: 'proxmox' });
+      }
     });
 
-    it('returns failure on network error', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://unreachable:8006',
-        tokenId: 'root@pam!token',
-        tokenSecret: 'secret',
-      });
+    it('should throw PlatformError on auth failure (401)', async () => {
+      mockGet.mockRejectedValueOnce(new Error('Proxmox GET /nodes failed (401)'));
+      const node = makeVmNode();
 
-      mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
-
-      const result = await connector.testConnection();
-      expect(result.success).toBe(false);
-      expect(result.message).toContain('ECONNREFUSED');
-    });
-  });
-
-  describe('testConnection — ticket auth', () => {
-    it('succeeds when POST /access/ticket returns ticket', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        username: 'root@pam',
-        password: 'pass123',
-      });
-
-      mockFetch.mockReturnValueOnce(
-        jsonResponse({ ticket: 'PVE:root@pam:xxxx', CSRFPreventionToken: 'csrf-token' }),
-      );
-
-      const result = await connector.testConnection();
-      expect(result.success).toBe(true);
-      expect(result.message).toContain('ticket');
-
-      // Verify it POSTed to /access/ticket
-      const call = mockFetch.mock.calls[0]!;
-      expect(call[0]).toBe('https://pve:8006/api2/json/access/ticket');
-      expect(call[1].method).toBe('POST');
-    });
-
-    it('returns failure on bad credentials', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        username: 'root@pam',
-        password: 'wrong',
-      });
-
-      mockFetch.mockReturnValueOnce(errorResponse(401, 'authentication failure'));
-
-      const result = await connector.testConnection();
-      expect(result.success).toBe(false);
-    });
-  });
-
-  describe('listResources', () => {
-    function setupTicketAuth() {
-      mockFetch.mockReturnValueOnce(
-        jsonResponse({ ticket: 'PVE:ticket', CSRFPreventionToken: 'csrf' }),
-      );
-    }
-
-    it('discovers VMs and LXC containers from a single node', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        username: 'root@pam',
-        password: 'pass',
-      });
-
-      setupTicketAuth();
-      // GET /nodes
-      mockFetch.mockReturnValueOnce(jsonResponse([{ node: 'pve1' }]));
-      // GET /nodes/pve1/qemu
-      mockFetch.mockReturnValueOnce(
-        jsonResponse([
-          { vmid: 100, name: 'web-server', status: 'running' },
-          { vmid: 101, name: 'db-server', status: 'stopped' },
-        ]),
-      );
-      // GET /nodes/pve1/lxc
-      mockFetch.mockReturnValueOnce(
-        jsonResponse([
-          { vmid: 200, name: 'dns-ct', status: 'running' },
-        ]),
-      );
-
-      const resources = await connector.listResources();
-      expect(resources).toHaveLength(3);
-      expect(resources[0]).toEqual({
-        name: 'web-server',
-        type: 'vm',
-        platformRef: { node: 'pve1', vmid: 100, type: 'qemu' },
-        status: 'running',
-      });
-      expect(resources[1]!.status).toBe('stopped');
-      expect(resources[2]).toEqual({
-        name: 'dns-ct',
-        type: 'container',
-        platformRef: { node: 'pve1', vmid: 200, type: 'lxc' },
-        status: 'running',
-      });
-    });
-
-    it('discovers VMs and containers from multiple nodes', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        username: 'root@pam',
-        password: 'pass',
-      });
-
-      setupTicketAuth();
-      mockFetch.mockReturnValueOnce(jsonResponse([{ node: 'pve1' }, { node: 'pve2' }]));
-      // pve1 qemu
-      mockFetch.mockReturnValueOnce(
-        jsonResponse([{ vmid: 100, name: 'vm-a', status: 'running' }]),
-      );
-      // pve1 lxc
-      mockFetch.mockReturnValueOnce(
-        jsonResponse([]),
-      );
-      // pve2 qemu
-      mockFetch.mockReturnValueOnce(
-        jsonResponse([{ vmid: 200, name: 'vm-b', status: 'paused' }]),
-      );
-      // pve2 lxc
-      mockFetch.mockReturnValueOnce(
-        jsonResponse([{ vmid: 300, name: 'ct-c', status: 'stopped' }]),
-      );
-
-      const resources = await connector.listResources();
-      expect(resources).toHaveLength(3);
-      expect(resources[0]!.platformRef.node).toBe('pve1');
-      expect(resources[1]!.platformRef.node).toBe('pve2');
-      expect(resources[2]!.type).toBe('container');
-      expect(resources[2]!.status).toBe('stopped');
-    });
-
-    it('handles VMs without name', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-      });
-
-      // Token auth — no ticket call needed
-      mockFetch.mockReturnValueOnce(jsonResponse([{ node: 'pve1' }]));
-      mockFetch.mockReturnValueOnce(
-        jsonResponse([{ vmid: 100, status: 'stopped' }]),
-      );
-      mockFetch.mockReturnValueOnce(jsonResponse([]));
-
-      const resources = await connector.listResources();
-      expect(resources[0]!.name).toBe('VM 100');
-    });
-
-    it('handles LXC containers without name', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-      });
-
-      mockFetch.mockReturnValueOnce(jsonResponse([{ node: 'pve1' }]));
-      mockFetch.mockReturnValueOnce(jsonResponse([]));
-      mockFetch.mockReturnValueOnce(
-        jsonResponse([{ vmid: 300, status: 'running' }]),
-      );
-
-      const resources = await connector.listResources();
-      expect(resources).toHaveLength(1);
-      expect(resources[0]!.name).toBe('CT 300');
-      expect(resources[0]!.type).toBe('container');
+      try {
+        await connector.testConnection(node);
+        expect.unreachable('should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError);
+        expect(error).toMatchObject({ code: 'PROXMOX_AUTH_FAILED', platform: 'proxmox' });
+      }
     });
   });
 
   describe('start', () => {
-    it('POSTs to qemu endpoint for VMs (default)', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-        resourceRef: { node: 'pve1', vmid: 100 },
-      });
+    it('should POST start for a VM (qemu)', async () => {
+      mockPost.mockResolvedValueOnce('UPID:pve1:00001234');
+      const node = makeVmNode();
 
-      mockFetch.mockReturnValueOnce(jsonResponse('UPID:pve1:start'));
+      await connector.start(node);
 
-      await connector.start();
-
-      const call = mockFetch.mock.calls[0]!;
-      expect(call[0]).toBe('https://pve:8006/api2/json/nodes/pve1/qemu/100/status/start');
-      expect(call[1].method).toBe('POST');
+      expect(mockPost).toHaveBeenCalledWith('/nodes/pve1/qemu/100/status/start');
+      expect(mockDestroy).toHaveBeenCalled();
     });
 
-    it('POSTs to lxc endpoint for LXC containers', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-        resourceRef: { node: 'pve1', vmid: 200, type: 'lxc' },
-      });
+    it('should POST start for a LXC', async () => {
+      mockPost.mockResolvedValueOnce('UPID:pve1:00005678');
+      const node = makeLxcNode();
 
-      mockFetch.mockReturnValueOnce(jsonResponse('UPID:pve1:start'));
+      await connector.start(node);
 
-      await connector.start();
-
-      const call = mockFetch.mock.calls[0]!;
-      expect(call[0]).toBe('https://pve:8006/api2/json/nodes/pve1/lxc/200/status/start');
+      expect(mockPost).toHaveBeenCalledWith('/nodes/pve1/lxc/200/status/start');
     });
 
-    it('throws PlatformError if no resourceRef', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-      });
+    it('should throw PlatformError when start fails', async () => {
+      mockPost.mockRejectedValueOnce(new Error('Proxmox POST failed (500)'));
+      const node = makeVmNode();
 
-      await expect(connector.start()).rejects.toThrow(PlatformError);
+      try {
+        await connector.start(node);
+        expect.unreachable('should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError);
+        expect(error).toMatchObject({ code: 'PROXMOX_START_FAILED', platform: 'proxmox' });
+      }
+    });
+
+    it('should throw PlatformError when platformRef is missing', async () => {
+      const node = makeVmNode({ platformRef: null });
+
+      try {
+        await connector.start(node);
+        expect.unreachable('should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError);
+        expect(error).toMatchObject({ code: 'PROXMOX_VM_NOT_FOUND' });
+      }
     });
   });
 
   describe('stop', () => {
-    it('POSTs to qemu endpoint for VMs (default)', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-        resourceRef: { node: 'pve1', vmid: 100 },
-      });
+    it('should POST stop for a VM (qemu)', async () => {
+      mockPost.mockResolvedValueOnce('UPID:pve1:00001234');
+      const node = makeVmNode();
 
-      mockFetch.mockReturnValueOnce(jsonResponse('UPID:pve1:stop'));
+      await connector.stop(node);
 
-      await connector.stop();
-
-      const call = mockFetch.mock.calls[0]!;
-      expect(call[0]).toBe('https://pve:8006/api2/json/nodes/pve1/qemu/100/status/stop');
-      expect(call[1].method).toBe('POST');
+      expect(mockPost).toHaveBeenCalledWith('/nodes/pve1/qemu/100/status/shutdown');
     });
 
-    it('POSTs to lxc endpoint for LXC containers', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-        resourceRef: { node: 'pve1', vmid: 200, type: 'lxc' },
-      });
+    it('should POST shutdown for a LXC', async () => {
+      mockPost.mockResolvedValueOnce('UPID:pve1:00005678');
+      const node = makeLxcNode();
 
-      mockFetch.mockReturnValueOnce(jsonResponse('UPID:pve1:stop'));
+      await connector.stop(node);
 
-      await connector.stop();
-
-      const call = mockFetch.mock.calls[0]!;
-      expect(call[0]).toBe('https://pve:8006/api2/json/nodes/pve1/lxc/200/status/stop');
+      expect(mockPost).toHaveBeenCalledWith('/nodes/pve1/lxc/200/status/shutdown');
     });
 
-    it('throws PlatformError if no resourceRef', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-      });
+    it('should throw PlatformError when shutdown fails', async () => {
+      mockPost.mockRejectedValueOnce(new Error('Proxmox POST failed (500)'));
+      const node = makeVmNode();
 
-      await expect(connector.stop()).rejects.toThrow(PlatformError);
+      try {
+        await connector.stop(node);
+        expect.unreachable('should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError);
+        expect(error).toMatchObject({ code: 'PROXMOX_SHUTDOWN_FAILED', platform: 'proxmox' });
+      }
     });
   });
 
   describe('getStatus', () => {
-    it('returns online when VM is running', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-        resourceRef: { node: 'pve1', vmid: 100 },
-      });
+    it('should return online for running VM', async () => {
+      mockGet.mockResolvedValueOnce({ status: 'running', vmid: 100 });
+      const node = makeVmNode();
 
-      mockFetch.mockReturnValueOnce(jsonResponse({ status: 'running' }));
+      const status = await connector.getStatus(node);
 
-      const status = await connector.getStatus();
       expect(status).toBe('online');
+      expect(mockGet).toHaveBeenCalledWith('/nodes/pve1/qemu/100/status/current');
     });
 
-    it('uses lxc endpoint for LXC containers', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-        resourceRef: { node: 'pve1', vmid: 200, type: 'lxc' },
-      });
+    it('should return offline for stopped VM', async () => {
+      mockGet.mockResolvedValueOnce({ status: 'stopped', vmid: 100 });
+      const node = makeVmNode();
 
-      mockFetch.mockReturnValueOnce(jsonResponse({ status: 'running' }));
+      const status = await connector.getStatus(node);
 
-      const status = await connector.getStatus();
-      expect(status).toBe('online');
-
-      const call = mockFetch.mock.calls[0]!;
-      expect(call[0]).toBe('https://pve:8006/api2/json/nodes/pve1/lxc/200/status/current');
-    });
-
-    it('returns offline when VM is stopped', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-        resourceRef: { node: 'pve1', vmid: 100 },
-      });
-
-      mockFetch.mockReturnValueOnce(jsonResponse({ status: 'stopped' }));
-
-      const status = await connector.getStatus();
       expect(status).toBe('offline');
     });
 
-    it('returns error when fetch fails', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-        resourceRef: { node: 'pve1', vmid: 100 },
-      });
+    it('should return offline for paused VM', async () => {
+      mockGet.mockResolvedValueOnce({ status: 'paused', vmid: 100 });
+      const node = makeVmNode();
 
-      mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+      const status = await connector.getStatus(node);
 
-      const status = await connector.getStatus();
-      expect(status).toBe('error');
+      expect(status).toBe('offline');
     });
 
-    it('returns unknown when no resourceRef', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-      });
+    it('should use lxc path for LXC node', async () => {
+      mockGet.mockResolvedValueOnce({ status: 'running', vmid: 200 });
+      const node = makeLxcNode();
 
-      const status = await connector.getStatus();
-      expect(status).toBe('unknown');
+      const status = await connector.getStatus(node);
+
+      expect(status).toBe('online');
+      expect(mockGet).toHaveBeenCalledWith('/nodes/pve1/lxc/200/status/current');
+    });
+
+    it('should return error when getStatus fails', async () => {
+      mockGet.mockRejectedValueOnce(new Error('API Error'));
+      const node = makeVmNode();
+
+      const status = await connector.getStatus(node);
+
+      expect(status).toBe('error');
     });
   });
 
-  describe('error wrapping', () => {
-    it('all errors are PlatformError with platform:proxmox', async () => {
-      const connector = new ProxmoxConnector({
-        apiUrl: 'https://pve:8006',
-        tokenId: 'root@pam!t',
-        tokenSecret: 's',
-        resourceRef: { node: 'pve1', vmid: 100 },
-      });
+  describe('getStats', () => {
+    it('should return CPU and RAM usage from Proxmox status/current', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.35, maxcpu: 4, mem: 2147483648, maxmem: 4294967296 });
+      const node = makeVmNode();
 
-      mockFetch.mockReturnValueOnce(errorResponse(500, 'internal error'));
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.35, ramUsage: 0.5 });
+      expect(mockGet).toHaveBeenCalledWith('/nodes/pve1/qemu/100/status/current');
+      expect(mockDestroy).toHaveBeenCalled();
+    });
+
+    it('should use lxc path for LXC node', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.1, maxcpu: 2, mem: 1073741824, maxmem: 2147483648 });
+      const node = makeLxcNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.1, ramUsage: 0.5 });
+      expect(mockGet).toHaveBeenCalledWith('/nodes/pve1/lxc/200/status/current');
+    });
+
+    it('should return null on API error', async () => {
+      mockGet.mockRejectedValueOnce(new Error('API Error'));
+      const node = makeVmNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toBeNull();
+      expect(mockDestroy).toHaveBeenCalled();
+    });
+
+    it('should handle zero maxmem gracefully', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.5, maxcpu: 2, mem: 0, maxmem: 0 });
+      const node = makeVmNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.5, ramUsage: 0 });
+    });
+
+    it('should return rxBytes/txBytes when netin/netout are present (VM)', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.35, maxcpu: 4, mem: 2147483648, maxmem: 4294967296, netin: 123456, netout: 654321 });
+      const node = makeVmNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.35, ramUsage: 0.5, rxBytes: 123456, txBytes: 654321 });
+    });
+
+    it('should return rxBytes/txBytes when netin/netout are present (LXC)', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.1, maxcpu: 2, mem: 1073741824, maxmem: 2147483648, netin: 500000, netout: 300000 });
+      const node = makeLxcNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.1, ramUsage: 0.5, rxBytes: 500000, txBytes: 300000 });
+      expect(mockGet).toHaveBeenCalledWith('/nodes/pve1/lxc/200/status/current');
+    });
+
+    it('should not return rxBytes/txBytes when netin/netout are absent', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.2, maxcpu: 4, mem: 1073741824, maxmem: 4294967296 });
+      const node = makeVmNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.2, ramUsage: 0.25 });
+      expect(stats).not.toHaveProperty('rxBytes');
+      expect(stats).not.toHaveProperty('txBytes');
+    });
+  });
+
+  describe('listResources', () => {
+    it('should return discovered resources mapped from Proxmox format', async () => {
+      mockGet.mockResolvedValueOnce([
+        { id: 'qemu/100', type: 'qemu', vmid: 100, name: 'ubuntu-server', node: 'pve1', status: 'running', template: 0 },
+        { id: 'lxc/200', type: 'lxc', vmid: 200, name: 'nginx-proxy', node: 'pve1', status: 'stopped', template: 0 },
+      ]);
+
+      const resources = await connector.listResources();
+
+      expect(resources).toHaveLength(2);
+      expect(resources[0]).toEqual({
+        vmid: 100,
+        name: 'ubuntu-server',
+        node: 'pve1',
+        type: 'qemu',
+        status: 'running',
+      });
+      expect(resources[1]).toEqual({
+        vmid: 200,
+        name: 'nginx-proxy',
+        node: 'pve1',
+        type: 'lxc',
+        status: 'stopped',
+      });
+      expect(mockGet).toHaveBeenCalledWith('/cluster/resources?type=vm');
+    });
+
+    it('should filter out templates', async () => {
+      mockGet.mockResolvedValueOnce([
+        { id: 'qemu/100', type: 'qemu', vmid: 100, name: 'ubuntu-server', node: 'pve1', status: 'running', template: 0 },
+        { id: 'qemu/9000', type: 'qemu', vmid: 9000, name: 'ubuntu-template', node: 'pve1', status: 'stopped', template: 1 },
+      ]);
+
+      const resources = await connector.listResources();
+
+      expect(resources).toHaveLength(1);
+      expect(resources[0]!.vmid).toBe(100);
+    });
+
+    it('should throw PlatformError on discovery failure', async () => {
+      mockGet.mockRejectedValueOnce(new Error('API Error'));
 
       try {
-        await connector.start();
-        expect.fail('should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(PlatformError);
-        expect((err as PlatformError).platform).toBe('proxmox');
+        await connector.listResources();
+        expect.unreachable('should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError);
+        expect(error).toMatchObject({ code: 'PROXMOX_DISCOVERY_FAILED', platform: 'proxmox' });
       }
     });
   });

@@ -1,575 +1,622 @@
 import { eq } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { cascades, operationLogs, services } from '../db/schema.js';
-import {
-  getUpstreamChain,
-  getStructuralDescendants,
-  getUpstreamDependencies,
-  getDownstreamLogicalDependents,
-} from './dependency-graph.js';
-import { createConnectorForNode } from './connector-factory.js';
+import type { Node, NodeStatus } from '@wakehub/shared';
+import { nodes, cascades } from '../db/schema.js';
+import type * as schema from '../db/schema.js';
+import { getUpstreamChain, getDownstreamDependents } from './dependency-graph.js';
+import { getConnector } from '../connectors/connector-factory.js';
+import type { PlatformConnector } from '../connectors/connector.interface.js';
 import { PlatformError } from '../utils/platform-error.js';
-import type { SSEManager } from '../sse/sse-manager.js';
+import { logOperation } from '../utils/log-operation.js';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Db = BetterSQLite3Database<any>;
+type DB = BetterSQLite3Database<typeof schema>;
 
-type NodeType = 'service';
-type ServiceStatus = typeof services.$inferInsert.status;
+// --- Constants ---
 
-const DEFAULT_STEP_TIMEOUT_MS = 30_000;
-const POLL_INTERVAL_MS = 2_000;
+export const CASCADE_STEP_TIMEOUT_MS = 30_000;
+export const CASCADE_POLL_INTERVAL_MS = 1_000;
 
-interface CascadeOptions {
-  stepTimeoutMs?: number;
-  pollIntervalMs?: number;
-  sseManager?: SSEManager;
+// --- Error codes ---
+
+export const CASCADE_NODE_NOT_FOUND = 'CASCADE_NODE_NOT_FOUND';
+export const CASCADE_STEP_TIMEOUT = 'CASCADE_STEP_TIMEOUT';
+export const CASCADE_CONNECTOR_ERROR = 'CASCADE_CONNECTOR_ERROR';
+export const CASCADE_NOT_FOUND = 'CASCADE_NOT_FOUND';
+
+// --- Progress event types ---
+
+export type CascadeProgressEvent =
+  | { type: 'cascade-started'; cascadeId: string; nodeId: string; totalSteps: number }
+  | { type: 'step-progress'; cascadeId: string; nodeId: string; stepIndex: number; totalSteps: number; currentNodeId: string; currentNodeName: string }
+  | { type: 'node-status-change'; nodeId: string; status: NodeStatus }
+  | { type: 'cascade-complete'; cascadeId: string; nodeId: string; success: boolean; error?: { code: string; message: string } };
+
+export interface CascadeOptions {
+  cascadeId: string;
+  onProgress?: (event: CascadeProgressEvent) => void;
+  decryptFn?: (ciphertext: string) => string;
 }
+
+// --- Layer 1 Structural Utility Functions ---
 
 /**
- * Determine the node type for a given ID by checking services table.
+ * Get all structural ancestors by walking parentId chain from a node up to the root.
+ * Returns from highest (root) to lowest (direct parent), excluding the node itself.
  */
-function resolveNodeType(db: Db, nodeId: string): { nodeType: NodeType; name: string } | null {
-  const rows = db.select({ name: services.name }).from(services).where(eq(services.id, nodeId)).all();
-  if (rows.length > 0) return { nodeType: 'service', name: rows[0]!.name };
-  return null;
-}
+export async function getStructuralAncestors(nodeId: string, db: DB): Promise<typeof nodes.$inferSelect[]> {
+  const ancestors: typeof nodes.$inferSelect[] = [];
+  const visited = new Set<string>();
+  let currentId: string | null = nodeId;
 
-/**
- * Check if a node is already online/running.
- */
-function isNodeActive(status: string): boolean {
-  return status === 'online' || status === 'running';
-}
+  while (currentId) {
+    if (visited.has(currentId)) break; // cycle protection
+    visited.add(currentId);
 
-function isNodeStopped(status: string): boolean {
-  return status === 'offline' || status === 'stopped';
-}
+    const [node] = await db.select().from(nodes).where(eq(nodes.id, currentId));
+    if (!node) break;
 
-/**
- * Poll a connector's getStatus() until target status is reached or timeout.
- */
-async function pollUntilStatus(
-  connector: { getStatus(): Promise<string> },
-  targetCheck: (status: string) => boolean,
-  timeoutMs: number,
-  intervalMs: number,
-): Promise<string> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const status = await connector.getStatus();
-    if (targetCheck(status)) return status;
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  throw new PlatformError('TIMEOUT', 'Timeout en attente du changement de statut', 'cascade');
-}
-
-/**
- * After a successful stop(), poll for confirmation.
- * If poll times out, assume 'offline' — the host was told to shut down
- * and becoming unreachable is expected behavior (e.g. SSH shutdown).
- */
-async function pollOrAssumeOffline(
-  connector: { getStatus(): Promise<string> },
-  targetCheck: (status: string) => boolean,
-  timeoutMs: number,
-  intervalMs: number,
-): Promise<string> {
-  try {
-    return await pollUntilStatus(connector, targetCheck, timeoutMs, intervalMs);
-  } catch (err) {
-    if (err instanceof PlatformError && err.code === 'TIMEOUT') {
-      return 'offline';
+    if (currentId !== nodeId) {
+      ancestors.push(node);
     }
-    throw err;
+
+    currentId = node.parentId;
   }
+
+  // Reverse: root first, direct parent last
+  return ancestors.reverse();
 }
 
 /**
- * Execute a start cascade for the given service.
- * Starts dependencies from root to target in upstream order.
+ * Get all structural descendants recursively via parentId.
+ * Returns in bottom-up order (leaf-first) for safe shutdown ordering.
  */
-export async function executeCascadeStart(
-  db: Db,
-  cascadeId: string,
-  serviceId: string,
-  options: CascadeOptions = {},
-): Promise<void> {
-  const stepTimeout = options.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS;
-  const pollInterval = options.pollIntervalMs ?? POLL_INTERVAL_MS;
-  const sse = options.sseManager;
+export async function getStructuralDescendants(nodeId: string, db: DB): Promise<typeof nodes.$inferSelect[]> {
+  const result: typeof nodes.$inferSelect[] = [];
 
-  const resolved = resolveNodeType(db, serviceId);
-  if (!resolved) {
-    updateCascadeFailed(db, cascadeId, 0, 'NOT_FOUND', `Service ${serviceId} non trouvé`);
-    sse?.broadcast('cascade-error', {
-      cascadeId, serviceId, failedStep: 0,
-      error: { code: 'NOT_FOUND', message: `Service ${serviceId} non trouvé` },
-    });
+  async function collectChildren(parentId: string): Promise<void> {
+    const children = await db.select().from(nodes).where(eq(nodes.parentId, parentId));
+    for (const child of children) {
+      await collectChildren(child.id);
+      result.push(child);
+    }
+  }
+
+  await collectChildren(nodeId);
+  return result;
+}
+
+// --- Poll status utility ---
+
+export async function pollNodeStatus(
+  node: Node,
+  connector: PlatformConnector,
+  targetStatus: NodeStatus,
+  timeoutMs: number = CASCADE_STEP_TIMEOUT_MS,
+  pollIntervalMs: number = CASCADE_POLL_INTERVAL_MS,
+): Promise<boolean> {
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    const status = await connector.getStatus(node);
+    if (status === targetStatus) return true;
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+  }
+
+  return false;
+}
+
+// --- Cascade Start ---
+
+export async function executeCascadeStart(
+  targetNodeId: string,
+  db: DB,
+  options: CascadeOptions,
+): Promise<void> {
+  const { cascadeId, onProgress, decryptFn } = options;
+
+  // 1. Load target node
+  const [targetNode] = await db.select().from(nodes).where(eq(nodes.id, targetNodeId));
+  if (!targetNode) {
+    await db.update(cascades).set({
+      status: 'failed',
+      errorCode: CASCADE_NODE_NOT_FOUND,
+      errorMessage: 'Noeud introuvable',
+    }).where(eq(cascades.id, cascadeId));
     return;
   }
 
-  // Get upstream chain (closest parent first → farthest ancestor last)
-  const upstreamChain = getUpstreamChain(db, resolved.nodeType, serviceId);
+  // 2. Resolve execution plan
+  // Layer 2: get upstream functional dependencies (deep-first)
+  const upstreamChain = await getUpstreamChain(targetNodeId, db);
 
-  // Build full chain: reverse upstream (root first) + target at the end
-  const chain = [
-    ...upstreamChain.reverse(),
-    { nodeType: resolved.nodeType, nodeId: serviceId, name: resolved.name, status: '' },
-  ];
+  // Build ordered plan: for each node (deps first, then target),
+  // include structural ancestors (Layer 1)
+  const planNodeIds: string[] = [];
+  const seen = new Set<string>();
 
-  // Update cascade record with total steps
-  db.update(cascades)
-    .set({ status: 'in_progress', totalSteps: chain.length })
-    .where(eq(cascades.id, cascadeId))
-    .run();
+  // Process each functional dependency (deepest first) + target
+  // getUpstreamChain returns closest-first, reverse for deep-first
+  const reversedChain = [...upstreamChain].reverse();
+  const nodesInOrder = [...reversedChain.map((c) => c.nodeId), targetNodeId];
 
-  for (let i = 0; i < chain.length; i++) {
-    const node = chain[i]!;
-    const stepNum = i + 1;
+  for (const nid of nodesInOrder) {
+    // Get structural ancestors for this node
+    const ancestors = await getStructuralAncestors(nid, db);
+    for (const ancestor of ancestors) {
+      if (!seen.has(ancestor.id)) {
+        seen.add(ancestor.id);
+        planNodeIds.push(ancestor.id);
+      }
+    }
+    // Add the node itself
+    if (!seen.has(nid)) {
+      seen.add(nid);
+      planNodeIds.push(nid);
+    }
+  }
+
+  // 3. Filter out nodes already online
+  const planNodes: typeof nodes.$inferSelect[] = [];
+  for (const nid of planNodeIds) {
+    const [node] = await db.select().from(nodes).where(eq(nodes.id, nid));
+    if (!node) continue;
+    if (node.status === 'online') {
+      await logOperation(db, 'info', 'cascade-engine',
+        `Noeud ${node.name} déjà online — sauté`,
+        'Noeud déjà online',
+        { cascadeId, nodeId: nid },
+        { nodeId: nid, nodeName: node.name, eventType: 'decision', cascadeId },
+      );
+      continue;
+    }
+    planNodes.push(node);
+  }
+
+  const totalSteps = planNodes.length;
+
+  // 4. Update cascade record
+  await db.update(cascades).set({
+    status: 'in_progress',
+    totalSteps,
+  }).where(eq(cascades.id, cascadeId));
+
+  onProgress?.({
+    type: 'cascade-started',
+    cascadeId,
+    nodeId: targetNodeId,
+    totalSteps,
+  });
+
+  // 5. Execute each step sequentially
+  for (let i = 0; i < planNodes.length; i++) {
+    const node = planNodes[i]!;
 
     try {
-      const connector = createConnectorForNode(db, node.nodeType as NodeType, node.nodeId);
+      // Load parent for connector
+      const parentNode = node.parentId
+        ? (await db.select().from(nodes).where(eq(nodes.id, node.parentId)))[0]
+        : undefined;
 
-      if (!connector) {
-        // No connector (proxmox/docker host) — skip but count as step
-        db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-        logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${chain.length}: ${node.name} — ignoré (pas de connecteur)`, 'cascade-skip');
-        sse?.broadcast('cascade-progress', {
-          cascadeId, serviceId, step: stepNum, totalSteps: chain.length,
-          currentDependency: { id: node.nodeId, name: node.name, status: 'skipped' },
-        });
-        continue;
-      }
+      const connector = getConnector(node.type, {
+        parentNode: parentNode as Node | undefined,
+        decryptFn,
+      });
 
-      // Check if already online — skip start
-      const currentStatus = await connector.getStatus();
-      if (isNodeActive(currentStatus)) {
-        // Persist actual status (e.g. Docker host was 'unknown' but API responds → 'online')
-        db.update(services).set({ status: currentStatus as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, node.nodeId)).run();
-        db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-        logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${chain.length}: ${node.name} — déjà actif`, 'cascade-skip-active');
-        sse?.broadcast('cascade-progress', {
-          cascadeId, serviceId, step: stepNum, totalSteps: chain.length,
-          currentDependency: { id: node.nodeId, name: node.name, status: currentStatus },
-        });
-        sse?.broadcast('status-change', { serviceId: node.nodeId, status: currentStatus, timestamp: new Date().toISOString() });
-        continue;
-      }
+      // Update node status to starting
+      await db.update(nodes).set({ status: 'starting' }).where(eq(nodes.id, node.id));
+      onProgress?.({ type: 'node-status-change', nodeId: node.id, status: 'starting' });
+
+      onProgress?.({
+        type: 'step-progress',
+        cascadeId,
+        nodeId: targetNodeId,
+        stepIndex: i,
+        totalSteps,
+        currentNodeId: node.id,
+        currentNodeName: node.name,
+      });
 
       // Start the node
-      logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${chain.length}: Démarrage de ${node.name}`, 'cascade-start-step');
-      sse?.broadcast('cascade-progress', {
-        cascadeId, serviceId, step: stepNum, totalSteps: chain.length,
-        currentDependency: { id: node.nodeId, name: node.name, status: 'starting' },
-      });
+      await connector.start(node as Node);
 
-      try {
-        await connector.start();
-      } catch (startErr) {
-        // Host can't be started (no WoL) — check if it's actually reachable anyway
-        if (startErr instanceof PlatformError && startErr.code === 'NO_START_CAPABILITY') {
-          const actualStatus = await connector.getStatus();
-          db.update(services).set({ status: actualStatus as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, node.nodeId)).run();
-          if (isNodeActive(actualStatus)) {
-            // Host is already online even though we can't start it — continue cascade
-            db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-            logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${chain.length}: ${node.name} — non démarrable (pas de WoL), mais joignable`, 'cascade-skip-no-capability');
-            sse?.broadcast('status-change', { serviceId: node.nodeId, status: actualStatus, timestamp: new Date().toISOString() });
-            propagateToStructuralChildren(db, node.nodeId, 'start', sse);
-            continue;
-          }
-          // Host is offline and can't be started — fail the cascade
-          throw new PlatformError('HOST_UNREACHABLE', `${node.name} est éteint et ne peut pas être démarré (pas de WoL configuré)`, 'cascade');
-        }
-        throw startErr;
-      }
-
-      // Poll until online
-      const finalStatus = await pollUntilStatus(connector, isNodeActive, stepTimeout, pollInterval);
-
-      // Persist status to DB
-      db.update(services).set({ status: finalStatus as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, node.nodeId)).run();
-
-      db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-      logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${chain.length}: ${node.name} — démarré avec succès`, 'cascade-step-ok');
-
-      // Emit status-change for the node that just came online
-      sse?.broadcast('status-change', {
-        serviceId: node.nodeId,
-        status: finalStatus, timestamp: new Date().toISOString(),
-      });
-
-      // Refresh structural children statuses (e.g. Docker containers, Proxmox VMs)
-      propagateToStructuralChildren(db, node.nodeId, 'start', sse);
-    } catch (err) {
-      const errorCode = err instanceof PlatformError ? err.code : 'UNKNOWN_ERROR';
-      const errorMessage = err instanceof Error ? err.message : String(err);
-
-      updateCascadeFailed(db, cascadeId, stepNum, errorCode, errorMessage);
-      logOperation(db, cascadeId, 'error', `Échec étape ${stepNum}/${chain.length}: ${node.name} — ${errorMessage}`, 'cascade-step-failed', {
-        nodeType: node.nodeType,
-        nodeId: node.nodeId,
-        errorCode,
-      });
-      sse?.broadcast('cascade-error', {
-        cascadeId, serviceId, failedStep: stepNum,
-        error: { code: errorCode, message: errorMessage },
-      });
-      return;
-    }
-  }
-
-  // All steps completed
-  db.update(cascades)
-    .set({ status: 'completed', completedAt: new Date() })
-    .where(eq(cascades.id, cascadeId))
-    .run();
-  logOperation(db, cascadeId, 'info', `Cascade start terminée avec succès (${chain.length} étapes)`, 'cascade-complete');
-  sse?.broadcast('cascade-complete', { cascadeId, serviceId, success: true });
-}
-
-/**
- * Execute a stop cascade for the given service.
- * 3-phase approach:
- *   Phase 1: Force-stop structural descendants (leaf-first) — they become unreachable when parent stops
- *   Phase 2: Stop the target service itself
- *   Phase 3: Conditionally clean up upstream logical dependencies (if no other active dependents)
- */
-export async function executeCascadeStop(
-  db: Db,
-  cascadeId: string,
-  serviceId: string,
-  options: CascadeOptions = {},
-): Promise<void> {
-  const stepTimeout = options.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS;
-  const pollInterval = options.pollIntervalMs ?? POLL_INTERVAL_MS;
-  const sse = options.sseManager;
-
-  const resolved = resolveNodeType(db, serviceId);
-  if (!resolved) {
-    updateCascadeFailed(db, cascadeId, 0, 'NOT_FOUND', `Service ${serviceId} non trouvé`);
-    sse?.broadcast('cascade-error', {
-      cascadeId, serviceId, failedStep: 0,
-      error: { code: 'NOT_FOUND', message: `Service ${serviceId} non trouvé` },
-    });
-    return;
-  }
-
-  // Phase 1: structural descendants (leaf-first)
-  const structuralDescendants = getStructuralDescendants(db, serviceId).reverse();
-  // Phase 2: target
-  const target = { nodeType: resolved.nodeType, nodeId: serviceId, name: resolved.name, status: '' };
-  // Phase 3: upstream logical dependencies
-  const upstreamLogical = getUpstreamDependencies(db, serviceId);
-
-  // Total steps = phase1 + phase2(1) + phase3
-  const totalSteps = structuralDescendants.length + 1 + upstreamLogical.length;
-
-  db.update(cascades)
-    .set({ status: 'in_progress', totalSteps })
-    .where(eq(cascades.id, cascadeId))
-    .run();
-
-  // Track all services being stopped in this cascade (for shared dependency checks)
-  const stoppingIds = new Set([
-    serviceId,
-    ...structuralDescendants.map(n => n.nodeId),
-  ]);
-
-  let stepNum = 0;
-
-  // ─── Phase 1: Force-stop structural descendants (leaf-first) ───
-  for (const node of structuralDescendants) {
-    stepNum++;
-    try {
-      // Structural children are forcibly stopped — no shared dependency check
-      const connector = createConnectorForNode(db, node.nodeType as NodeType, node.nodeId);
-
-      if (connector) {
-        const currentStatus = await connector.getStatus();
-        if (!isNodeStopped(currentStatus)) {
-          logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: Arrêt structurel de ${node.name}`, 'cascade-stop-step');
-          sse?.broadcast('cascade-progress', {
-            cascadeId, serviceId, step: stepNum, totalSteps,
-            currentDependency: { id: node.nodeId, name: node.name, status: 'stopping' },
-          });
-          await connector.stop();
-          const finalStatus = await pollOrAssumeOffline(connector, isNodeStopped, stepTimeout, pollInterval);
-          db.update(services).set({ status: finalStatus as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, node.nodeId)).run();
-          db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-          logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: ${node.name} — arrêté (structurel)`, 'cascade-step-ok');
-          sse?.broadcast('status-change', { serviceId: node.nodeId, status: finalStatus, timestamp: new Date().toISOString() });
-        } else {
-          db.update(services).set({ status: currentStatus as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, node.nodeId)).run();
-          db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-          sse?.broadcast('cascade-progress', {
-            cascadeId, serviceId, step: stepNum, totalSteps,
-            currentDependency: { id: node.nodeId, name: node.name, status: currentStatus },
-          });
-          sse?.broadcast('status-change', { serviceId: node.nodeId, status: currentStatus, timestamp: new Date().toISOString() });
-        }
-      } else {
-        // No connector — mark offline (parent going down makes this unreachable)
-        db.update(services).set({ status: 'offline' as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, node.nodeId)).run();
-        db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-        logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: ${node.name} — marqué hors ligne (enfant structurel)`, 'cascade-skip');
-        sse?.broadcast('cascade-progress', {
-          cascadeId, serviceId, step: stepNum, totalSteps,
-          currentDependency: { id: node.nodeId, name: node.name, status: 'offline' },
-        });
-        sse?.broadcast('status-change', { serviceId: node.nodeId, status: 'offline', timestamp: new Date().toISOString() });
-      }
-    } catch (err) {
-      // Structural child failed to stop — mark offline anyway (parent is going down)
-      db.update(services).set({ status: 'offline' as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, node.nodeId)).run();
-      sse?.broadcast('status-change', { serviceId: node.nodeId, status: 'offline', timestamp: new Date().toISOString() });
-      logOperation(db, cascadeId, 'warn', `Étape ${stepNum}/${totalSteps}: ${node.name} — échec arrêt structurel, marqué offline`, 'cascade-structural-fallback');
-      db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-    }
-  }
-
-  // ─── Phase 2: Stop the target service ───
-  stepNum++;
-  try {
-    const connector = createConnectorForNode(db, target.nodeType as NodeType, target.nodeId);
-
-    if (!connector) {
-      db.update(services).set({ status: 'offline' as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, target.nodeId)).run();
-      db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-      logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: ${target.name} — marqué hors ligne (pas de connecteur)`, 'cascade-skip');
-      sse?.broadcast('cascade-progress', {
-        cascadeId, serviceId, step: stepNum, totalSteps,
-        currentDependency: { id: target.nodeId, name: target.name, status: 'offline' },
-      });
-      sse?.broadcast('status-change', { serviceId: target.nodeId, status: 'offline', timestamp: new Date().toISOString() });
-    } else {
-      const currentStatus = await connector.getStatus();
-      if (isNodeStopped(currentStatus)) {
-        db.update(services).set({ status: currentStatus as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, target.nodeId)).run();
-        db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-        logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: ${target.name} — déjà arrêté`, 'cascade-skip-stopped');
-        sse?.broadcast('cascade-progress', {
-          cascadeId, serviceId, step: stepNum, totalSteps,
-          currentDependency: { id: target.nodeId, name: target.name, status: currentStatus },
-        });
-        sse?.broadcast('status-change', { serviceId: target.nodeId, status: currentStatus, timestamp: new Date().toISOString() });
-      } else {
-        logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: Arrêt de ${target.name}`, 'cascade-stop-step');
-        sse?.broadcast('cascade-progress', {
-          cascadeId, serviceId, step: stepNum, totalSteps,
-          currentDependency: { id: target.nodeId, name: target.name, status: 'stopping' },
-        });
-
-        let stopHandled = false;
-        try {
-          await connector.stop();
-        } catch (stopErr) {
-          // Host can't be stopped (no SSH/WoL) — update status from actual state, continue cascade
-          if (stopErr instanceof PlatformError && stopErr.code === 'NO_STOP_CAPABILITY') {
-            const actualStatus = await connector.getStatus();
-            db.update(services).set({ status: actualStatus as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, target.nodeId)).run();
-            db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-            logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: ${target.name} — non arrêtable (pas de SSH), statut: ${actualStatus}`, 'cascade-skip-no-capability');
-            sse?.broadcast('cascade-progress', {
-              cascadeId, serviceId, step: stepNum, totalSteps,
-              currentDependency: { id: target.nodeId, name: target.name, status: actualStatus },
-            });
-            sse?.broadcast('status-change', { serviceId: target.nodeId, status: actualStatus, timestamp: new Date().toISOString() });
-            stopHandled = true;
-          } else {
-            throw stopErr;
-          }
-        }
-
-        if (!stopHandled) {
-          const finalStatus = await pollOrAssumeOffline(connector, isNodeStopped, stepTimeout, pollInterval);
-          db.update(services).set({ status: finalStatus as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, target.nodeId)).run();
-          db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-          logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: ${target.name} — arrêté avec succès`, 'cascade-step-ok');
-          sse?.broadcast('status-change', { serviceId: target.nodeId, status: finalStatus, timestamp: new Date().toISOString() });
-        }
-      }
-    }
-  } catch (err) {
-    const errorCode = err instanceof PlatformError ? err.code : 'UNKNOWN_ERROR';
-    const errorMessage = err instanceof Error ? err.message : String(err);
-
-    db.update(services).set({ status: 'error' as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, target.nodeId)).run();
-    sse?.broadcast('status-change', { serviceId: target.nodeId, status: 'error', timestamp: new Date().toISOString() });
-
-    updateCascadeFailed(db, cascadeId, stepNum, errorCode, errorMessage);
-    logOperation(db, cascadeId, 'error', `Échec arrêt étape ${stepNum}/${totalSteps}: ${target.name} — ${errorMessage}`, 'cascade-step-failed', {
-      nodeType: target.nodeType, nodeId: target.nodeId, errorCode,
-    });
-    sse?.broadcast('cascade-error', {
-      cascadeId, serviceId, failedStep: stepNum,
-      error: { code: errorCode, message: errorMessage },
-    });
-    return;
-  }
-
-  // ─── Phase 3: Conditional upstream logical cleanup ───
-  for (const dep of upstreamLogical) {
-    stepNum++;
-    try {
-      // Check if this dependency has other active logical dependents outside this cascade
-      const logicalDependents = getDownstreamLogicalDependents(db, dep.nodeId);
-      const activeDependents = logicalDependents.filter(
-        (d) => !stoppingIds.has(d.nodeId) && isNodeActive(d.status),
+      // Poll until online or timeout
+      const success = await pollNodeStatus(
+        node as Node, connector, 'online',
+        CASCADE_STEP_TIMEOUT_MS, CASCADE_POLL_INTERVAL_MS,
       );
 
-      if (activeDependents.length > 0) {
-        db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-        logOperation(db, cascadeId, 'info',
-          `Arrêt de ${dep.name} annulé — dépendant actif : ${activeDependents[0]!.name}`,
-          'cascade-skip-shared',
+      if (!success) {
+        // Timeout
+        await db.update(nodes).set({ status: 'error' }).where(eq(nodes.id, node.id));
+        onProgress?.({ type: 'node-status-change', nodeId: node.id, status: 'error' });
+
+        const errorMessage = `Timeout : le noeud ${node.name} n'a pas répondu dans les ${CASCADE_STEP_TIMEOUT_MS / 1000}s`;
+        await db.update(cascades).set({
+          status: 'failed',
+          failedStep: i,
+          errorCode: CASCADE_STEP_TIMEOUT,
+          errorMessage,
+        }).where(eq(cascades.id, cascadeId));
+
+        await logOperation(db, 'error', 'cascade-engine', errorMessage, 'Timeout poll status', { cascadeId, nodeId: node.id },
+          { nodeId: node.id, nodeName: node.name, eventType: 'error', cascadeId, errorCode: CASCADE_STEP_TIMEOUT },
         );
-        sse?.broadcast('cascade-progress', {
-          cascadeId, serviceId, step: stepNum, totalSteps,
-          currentDependency: { id: dep.nodeId, name: dep.name, status: 'skipped-shared' },
+
+        onProgress?.({
+          type: 'cascade-complete',
+          cascadeId,
+          nodeId: targetNodeId,
+          success: false,
+          error: { code: CASCADE_STEP_TIMEOUT, message: errorMessage },
         });
-        continue;
+        return;
       }
 
-      const connector = createConnectorForNode(db, dep.nodeType as NodeType, dep.nodeId);
+      // Success — update node and cascade
+      await db.update(nodes).set({ status: 'online' }).where(eq(nodes.id, node.id));
+      onProgress?.({ type: 'node-status-change', nodeId: node.id, status: 'online' });
 
-      if (!connector) {
-        db.update(services).set({ status: 'offline' as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, dep.nodeId)).run();
-        db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-        logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: ${dep.name} — marqué hors ligne (pas de connecteur)`, 'cascade-skip');
-        sse?.broadcast('cascade-progress', {
-          cascadeId, serviceId, step: stepNum, totalSteps,
-          currentDependency: { id: dep.nodeId, name: dep.name, status: 'offline' },
-        });
-        sse?.broadcast('status-change', { serviceId: dep.nodeId, status: 'offline', timestamp: new Date().toISOString() });
-        continue;
-      }
+      await db.update(cascades).set({ currentStep: i + 1 }).where(eq(cascades.id, cascadeId));
 
-      const currentStatus = await connector.getStatus();
-      if (isNodeStopped(currentStatus)) {
-        db.update(services).set({ status: currentStatus as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, dep.nodeId)).run();
-        db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-        logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: ${dep.name} — déjà arrêté`, 'cascade-skip-stopped');
-        sse?.broadcast('cascade-progress', {
-          cascadeId, serviceId, step: stepNum, totalSteps,
-          currentDependency: { id: dep.nodeId, name: dep.name, status: currentStatus },
-        });
-        continue;
-      }
-
-      logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: Arrêt de ${dep.name} (dépendance inutilisée)`, 'cascade-stop-step');
-      sse?.broadcast('cascade-progress', {
-        cascadeId, serviceId, step: stepNum, totalSteps,
-        currentDependency: { id: dep.nodeId, name: dep.name, status: 'stopping' },
-      });
-
-      await connector.stop();
-      const finalStatus = await pollOrAssumeOffline(connector, isNodeStopped, stepTimeout, pollInterval);
-      db.update(services).set({ status: finalStatus as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, dep.nodeId)).run();
-      db.update(cascades).set({ currentStep: stepNum }).where(eq(cascades.id, cascadeId)).run();
-      logOperation(db, cascadeId, 'info', `Étape ${stepNum}/${totalSteps}: ${dep.name} — arrêté (dépendance nettoyée)`, 'cascade-step-ok');
-      sse?.broadcast('status-change', { serviceId: dep.nodeId, status: finalStatus, timestamp: new Date().toISOString() });
-
-      // Add this dep to stoppingIds for recursive checks
-      stoppingIds.add(dep.nodeId);
+      await logOperation(db, 'info', 'cascade-engine',
+        `Noeud ${node.name} démarré (étape ${i + 1}/${totalSteps})`,
+        null,
+        { cascadeId, nodeId: node.id },
+        { nodeId: node.id, nodeName: node.name, eventType: 'start', cascadeId },
+      );
     } catch (err) {
-      const errorCode = err instanceof PlatformError ? err.code : 'UNKNOWN_ERROR';
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = (err as Error).message;
+      const errCode = err instanceof PlatformError ? err.code : CASCADE_CONNECTOR_ERROR;
+      const errDetails = err instanceof PlatformError
+        ? { platform: err.platform, ...err.details, error: errorMessage }
+        : { error: errorMessage };
 
-      db.update(services).set({ status: 'error' as ServiceStatus, updatedAt: new Date() }).where(eq(services.id, dep.nodeId)).run();
-      sse?.broadcast('status-change', { serviceId: dep.nodeId, status: 'error', timestamp: new Date().toISOString() });
+      await db.update(nodes).set({ status: 'error' }).where(eq(nodes.id, node.id));
+      onProgress?.({ type: 'node-status-change', nodeId: node.id, status: 'error' });
 
-      updateCascadeFailed(db, cascadeId, stepNum, errorCode, errorMessage);
-      logOperation(db, cascadeId, 'error', `Échec arrêt étape ${stepNum}/${totalSteps}: ${dep.name} — ${errorMessage}`, 'cascade-step-failed', {
-        nodeType: dep.nodeType, nodeId: dep.nodeId, errorCode,
-      });
-      sse?.broadcast('cascade-error', {
-        cascadeId, serviceId, failedStep: stepNum,
-        error: { code: errorCode, message: errorMessage },
+      await db.update(cascades).set({
+        status: 'failed',
+        failedStep: i,
+        errorCode: errCode,
+        errorMessage,
+      }).where(eq(cascades.id, cascadeId));
+
+      await logOperation(db, 'error', 'cascade-engine',
+        `Erreur connecteur pour ${node.name} : ${errorMessage}`,
+        errorMessage,
+        { cascadeId, nodeId: node.id },
+        { nodeId: node.id, nodeName: node.name, eventType: 'error', cascadeId, errorCode: errCode, errorDetails: errDetails },
+      );
+
+      onProgress?.({
+        type: 'cascade-complete',
+        cascadeId,
+        nodeId: targetNodeId,
+        success: false,
+        error: { code: errCode, message: errorMessage },
       });
       return;
     }
   }
 
-  db.update(cascades)
-    .set({ status: 'completed', completedAt: new Date() })
-    .where(eq(cascades.id, cascadeId))
-    .run();
-  logOperation(db, cascadeId, 'info', `Cascade stop terminée avec succès (${totalSteps} étapes)`, 'cascade-complete');
-  sse?.broadcast('cascade-complete', { cascadeId, serviceId, success: true });
+  // 6. Cascade completed successfully
+  await db.update(cascades).set({
+    status: 'completed',
+    completedAt: new Date(),
+  }).where(eq(cascades.id, cascadeId));
+
+  onProgress?.({
+    type: 'cascade-complete',
+    cascadeId,
+    nodeId: targetNodeId,
+    success: true,
+  });
+
+  await logOperation(db, 'info', 'cascade-engine',
+    `Cascade de démarrage terminée avec succès (${totalSteps} étapes)`,
+    null,
+    { cascadeId, nodeId: targetNodeId },
+    { nodeId: targetNodeId, nodeName: targetNode.name, eventType: 'start', cascadeId },
+  );
 }
 
-/**
- * When a parent service changes status, propagate to structural children (parentId).
- * On stop: children become unreachable → mark as offline.
- * On start: poll each child's actual status via its connector.
- */
-function propagateToStructuralChildren(
-  db: Db,
-  parentId: string,
-  direction: 'stop' | 'start',
-  sse?: SSEManager,
-) {
-  const children = db.select({ id: services.id, name: services.name, type: services.type })
-    .from(services)
-    .where(eq(services.parentId, parentId))
-    .all();
+// --- Cascade Stop ---
 
-  for (const child of children) {
-    if (direction === 'stop') {
-      db.update(services)
-        .set({ status: 'offline' as ServiceStatus, updatedAt: new Date() })
-        .where(eq(services.id, child.id))
-        .run();
-      sse?.broadcast('status-change', {
-        serviceId: child.id,
-        status: 'offline',
-        timestamp: new Date().toISOString(),
+export async function executeCascadeStop(
+  targetNodeId: string,
+  db: DB,
+  options: CascadeOptions,
+): Promise<void> {
+  const { cascadeId, onProgress, decryptFn } = options;
+
+  // Load target node
+  const [targetNode] = await db.select().from(nodes).where(eq(nodes.id, targetNodeId));
+  if (!targetNode) {
+    await db.update(cascades).set({
+      status: 'failed',
+      errorCode: CASCADE_NODE_NOT_FOUND,
+      errorMessage: 'Noeud introuvable',
+    }).where(eq(cascades.id, cascadeId));
+    return;
+  }
+
+  // Track all stopped node IDs for shared dependency protection
+  const allStoppedIds = new Set<string>();
+  let stepIndex = 0;
+
+  // --- Helper: stop a single node ---
+  async function stopSingleNode(
+    node: typeof nodes.$inferSelect,
+    totalSteps: number,
+  ): Promise<boolean> {
+    if (node.status === 'offline') {
+      allStoppedIds.add(node.id);
+      await logOperation(db, 'info', 'cascade-engine',
+        `Noeud ${node.name} déjà offline — sauté`,
+        'Noeud déjà offline',
+        { cascadeId, nodeId: node.id },
+        { nodeId: node.id, nodeName: node.name, eventType: 'decision', cascadeId },
+      );
+      return true;
+    }
+
+    try {
+      const parentNode = node.parentId
+        ? (await db.select().from(nodes).where(eq(nodes.id, node.parentId)))[0]
+        : undefined;
+
+      const connector = getConnector(node.type, {
+        parentNode: parentNode as Node | undefined,
+        decryptFn,
       });
-    } else {
-      // Start: poll actual status from connector
-      const connector = createConnectorForNode(db, 'service', child.id);
-      if (connector) {
-        connector.getStatus().then((childStatus) => {
-          db.update(services)
-            .set({ status: childStatus as ServiceStatus, updatedAt: new Date() })
-            .where(eq(services.id, child.id))
-            .run();
-          sse?.broadcast('status-change', {
-            serviceId: child.id,
-            status: childStatus,
-            timestamp: new Date().toISOString(),
-          });
-        }).catch(() => {
-          // Child unreachable — leave current status
+
+      // Update to stopping
+      await db.update(nodes).set({ status: 'stopping' }).where(eq(nodes.id, node.id));
+      onProgress?.({ type: 'node-status-change', nodeId: node.id, status: 'stopping' });
+
+      onProgress?.({
+        type: 'step-progress',
+        cascadeId,
+        nodeId: targetNodeId,
+        stepIndex,
+        totalSteps,
+        currentNodeId: node.id,
+        currentNodeName: node.name,
+      });
+
+      await connector.stop(node as Node);
+
+      const success = await pollNodeStatus(
+        node as Node, connector, 'offline',
+        CASCADE_STEP_TIMEOUT_MS, CASCADE_POLL_INTERVAL_MS,
+      );
+
+      if (!success) {
+        const errorMessage = `Timeout : le noeud ${node.name} n'a pas répondu dans les ${CASCADE_STEP_TIMEOUT_MS / 1000}s`;
+        await db.update(nodes).set({ status: 'error' }).where(eq(nodes.id, node.id));
+        onProgress?.({ type: 'node-status-change', nodeId: node.id, status: 'error' });
+
+        await db.update(cascades).set({
+          status: 'failed',
+          failedStep: stepIndex,
+          errorCode: CASCADE_STEP_TIMEOUT,
+          errorMessage,
+        }).where(eq(cascades.id, cascadeId));
+
+        await logOperation(db, 'error', 'cascade-engine', errorMessage, 'Timeout poll status', { cascadeId, nodeId: node.id },
+          { nodeId: node.id, nodeName: node.name, eventType: 'error', cascadeId, errorCode: CASCADE_STEP_TIMEOUT },
+        );
+
+        onProgress?.({
+          type: 'cascade-complete',
+          cascadeId,
+          nodeId: targetNodeId,
+          success: false,
+          error: { code: CASCADE_STEP_TIMEOUT, message: errorMessage },
         });
+        return false;
       }
+
+      await db.update(nodes).set({ status: 'offline' }).where(eq(nodes.id, node.id));
+      onProgress?.({ type: 'node-status-change', nodeId: node.id, status: 'offline' });
+      allStoppedIds.add(node.id);
+
+      await db.update(cascades).set({ currentStep: stepIndex + 1 }).where(eq(cascades.id, cascadeId));
+      stepIndex++;
+
+      await logOperation(db, 'info', 'cascade-engine',
+        `Noeud ${node.name} arrêté (étape ${stepIndex}/${totalSteps})`,
+        null,
+        { cascadeId, nodeId: node.id },
+        { nodeId: node.id, nodeName: node.name, eventType: 'stop', cascadeId },
+      );
+
+      return true;
+    } catch (err) {
+      const errorMessage = (err as Error).message;
+      const errCode = err instanceof PlatformError ? err.code : CASCADE_CONNECTOR_ERROR;
+      const errDetails = err instanceof PlatformError
+        ? { platform: err.platform, ...err.details, error: errorMessage }
+        : { error: errorMessage };
+
+      await db.update(nodes).set({ status: 'error' }).where(eq(nodes.id, node.id));
+      onProgress?.({ type: 'node-status-change', nodeId: node.id, status: 'error' });
+
+      await db.update(cascades).set({
+        status: 'failed',
+        failedStep: stepIndex,
+        errorCode: errCode,
+        errorMessage,
+      }).where(eq(cascades.id, cascadeId));
+
+      await logOperation(db, 'error', 'cascade-engine',
+        `Erreur connecteur pour ${node.name} : ${errorMessage}`,
+        errorMessage,
+        { cascadeId, nodeId: node.id },
+        { nodeId: node.id, nodeName: node.name, eventType: 'error', cascadeId, errorCode: errCode, errorDetails: errDetails },
+      );
+
+      onProgress?.({
+        type: 'cascade-complete',
+        cascadeId,
+        nodeId: targetNodeId,
+        success: false,
+        error: { code: errCode, message: errorMessage },
+      });
+      return false;
     }
   }
+
+  // --- Calculate total steps ---
+  // Phase 1: structural descendants
+  const structuralDescendants = await getStructuralDescendants(targetNodeId, db);
+  const onlineDescendants = structuralDescendants.filter((d) => d.status !== 'offline');
+
+  // Phase 2: target node
+  const targetSteps = targetNode.status !== 'offline' ? 1 : 0;
+
+  // Phase 3: estimate (may grow dynamically, but start with upstream chain)
+  // We'll recalculate totalSteps as we go for Phase 3
+  let totalSteps = onlineDescendants.length + targetSteps;
+
+  // Update cascade
+  await db.update(cascades).set({
+    status: 'in_progress',
+    totalSteps,
+  }).where(eq(cascades.id, cascadeId));
+
+  onProgress?.({
+    type: 'cascade-started',
+    cascadeId,
+    nodeId: targetNodeId,
+    totalSteps,
+  });
+
+  // --- Phase 1: Stop structural descendants (leaf-first) ---
+  for (const descendant of structuralDescendants) {
+    if (descendant.status === 'offline') {
+      allStoppedIds.add(descendant.id);
+      continue;
+    }
+    const ok = await stopSingleNode(descendant, totalSteps);
+    if (!ok) return; // cascade failed
+  }
+
+  // --- Phase 2: Stop target node ---
+  if (targetNode.status !== 'offline') {
+    const ok = await stopSingleNode(targetNode, totalSteps);
+    if (!ok) return;
+  } else {
+    allStoppedIds.add(targetNode.id);
+  }
+
+  // --- Phase 3: Conditional upstream cleanup ---
+  await cleanupUpstream(targetNodeId, db, options, allStoppedIds, totalSteps, stopSingleNode);
+
+  // --- Cascade completed ---
+  await db.update(cascades).set({
+    status: 'completed',
+    completedAt: new Date(),
+    totalSteps: stepIndex, // final actual steps
+  }).where(eq(cascades.id, cascadeId));
+
+  onProgress?.({
+    type: 'cascade-complete',
+    cascadeId,
+    nodeId: targetNodeId,
+    success: true,
+  });
+
+  await logOperation(db, 'info', 'cascade-engine',
+    `Cascade d'arrêt terminée avec succès (${stepIndex} étapes)`,
+    null,
+    { cascadeId, nodeId: targetNodeId },
+    { nodeId: targetNodeId, nodeName: targetNode.name, eventType: 'stop', cascadeId },
+  );
 }
 
-function updateCascadeFailed(db: Db, cascadeId: string, step: number, code: string, message: string) {
-  db.update(cascades)
-    .set({ status: 'failed', failedStep: step, errorCode: code, errorMessage: message, completedAt: new Date() })
-    .where(eq(cascades.id, cascadeId))
-    .run();
-}
+// --- Phase 3 recursive cleanup ---
 
-function logOperation(
-  db: Db,
-  cascadeId: string,
-  level: 'info' | 'warn' | 'error',
-  message: string,
-  reason: string,
-  extraDetails?: Record<string, unknown>,
-) {
-  db.insert(operationLogs).values({
-    timestamp: new Date(),
-    level,
-    source: 'cascade-engine',
-    message,
-    reason,
-    details: { cascadeId, ...extraDetails },
-  }).run();
+async function cleanupUpstream(
+  nodeId: string,
+  db: DB,
+  options: CascadeOptions,
+  allStoppedIds: Set<string>,
+  totalSteps: number,
+  stopSingleNode: (node: typeof nodes.$inferSelect, totalSteps: number) => Promise<boolean>,
+): Promise<void> {
+  const { cascadeId } = options;
+
+  const upstreamChain = await getUpstreamChain(nodeId, db);
+
+  for (const dep of upstreamChain) {
+    // Check if already stopped in this cascade
+    if (allStoppedIds.has(dep.nodeId)) continue;
+
+    // Load full node from DB (need confirmBeforeShutdown)
+    const [depNode] = await db.select().from(nodes).where(eq(nodes.id, dep.nodeId));
+    if (!depNode || depNode.status === 'offline') {
+      allStoppedIds.add(dep.nodeId);
+      continue;
+    }
+
+    // Check for active downstream dependents (functional) AND structural children
+    const functionalDependents = await getDownstreamDependents(dep.nodeId, db);
+    const structuralChildren = await getStructuralDescendants(dep.nodeId, db);
+
+    const activeFunctional = functionalDependents.filter(
+      (d) => !allStoppedIds.has(d.nodeId) && d.status !== 'offline',
+    );
+    const activeStructural = structuralChildren.filter(
+      (c) => !allStoppedIds.has(c.id) && c.status !== 'offline',
+    );
+    const activeDependents = [
+      ...activeFunctional,
+      ...activeStructural.map((c) => ({ nodeId: c.id, name: c.name, type: c.type, status: c.status })),
+    ];
+
+    if (activeDependents.length > 0) {
+      // Shared dependency — protected
+      const dependentNames = activeDependents.map((d) => d.name).join(', ');
+      await logOperation(db, 'warn', 'cascade-engine',
+        `Dépendance partagée ${depNode.name} protégée — dépendants actifs: ${dependentNames}`,
+        `Dépendance partagée — dépendant actif: ${dependentNames}`,
+        { cascadeId, nodeId: dep.nodeId },
+        { nodeId: dep.nodeId, nodeName: depNode.name, eventType: 'decision', cascadeId },
+      );
+      continue;
+    }
+
+    if (depNode.confirmBeforeShutdown) {
+      // Don't auto-stop — log as proposed
+      await logOperation(db, 'warn', 'cascade-engine',
+        `Extinction proposée pour ${depNode.name} — confirmBeforeShutdown activé`,
+        'Extinction proposée — confirmBeforeShutdown activé',
+        { cascadeId, nodeId: dep.nodeId },
+        { nodeId: dep.nodeId, nodeName: depNode.name, eventType: 'decision', cascadeId },
+      );
+      continue;
+    }
+
+    // No active dependents and confirmBeforeShutdown is OFF — auto-stop
+
+    // Phase 1 recursive: stop structural descendants of this dep
+    const depDescendants = await getStructuralDescendants(dep.nodeId, db);
+    for (const child of depDescendants) {
+      if (child.status === 'offline') {
+        allStoppedIds.add(child.id);
+        continue;
+      }
+      if (allStoppedIds.has(child.id)) continue;
+      const ok = await stopSingleNode(child, totalSteps);
+      if (!ok) return;
+    }
+
+    // Stop the dependency node itself
+    const ok = await stopSingleNode(depNode, totalSteps);
+    if (!ok) return;
+
+    // Recurse: check upstream deps of this now-stopped dep
+    await cleanupUpstream(dep.nodeId, db, options, allStoppedIds, totalSteps, stopSingleNode);
+  }
 }

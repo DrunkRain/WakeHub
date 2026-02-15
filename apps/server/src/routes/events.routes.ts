@@ -1,78 +1,45 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { eq } from 'drizzle-orm';
-import { sessions } from '../db/schema.js';
-import { extractSessionToken } from '../middleware/auth.middleware.js';
+import { config } from '../config.js';
 
 const eventsRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get<{ Querystring: { token?: string } }>(
-    '/api/events',
-    {
-      schema: {
-        querystring: {
-          type: 'object',
-          properties: {
-            token: { type: 'string' },
-          },
-        },
-      },
-    },
-    async (request, reply) => {
-      // Auth: check cookie/header first, then query param fallback
-      let token = extractSessionToken(request);
-      if (!token && request.query.token) {
-        token = request.query.token;
+  // GET /api/events — SSE endpoint
+  fastify.get('/events', async (request, reply) => {
+    const clientId = crypto.randomUUID();
+
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      // CORS headers (hijack bypasses @fastify/cors — use same configured origin)
+      'Access-Control-Allow-Origin': config.corsOrigin,
+      'Access-Control-Allow-Credentials': 'true',
+    });
+
+    // Retry delay for client reconnection
+    raw.write('retry: 5000\n\n');
+
+    // Replay missed events if reconnecting
+    const lastEventIdHeader = request.headers['last-event-id'];
+    const lastEventId = Array.isArray(lastEventIdHeader) ? lastEventIdHeader[0] : lastEventIdHeader;
+    if (lastEventId) {
+      const parsed = parseInt(lastEventId, 10);
+      if (!Number.isNaN(parsed)) {
+        fastify.sseManager.replayEvents(parsed, raw);
       }
+    }
 
-      if (!token) {
-        return reply.status(401).send({
-          error: { code: 'UNAUTHORIZED', message: 'Session invalide ou expirée' },
-        });
-      }
+    // Register client
+    fastify.sseManager.addClient(clientId, raw);
 
-      // Validate session token in DB
-      const [session] = fastify.db
-        .select()
-        .from(sessions)
-        .where(eq(sessions.token, token))
-        .limit(1)
-        .all();
-
-      if (!session) {
-        return reply.status(401).send({
-          error: { code: 'UNAUTHORIZED', message: 'Session invalide ou expirée' },
-        });
-      }
-
-      const now = new Date();
-      const expiresAt = session.expiresAt instanceof Date ? session.expiresAt : new Date(session.expiresAt);
-      if (now > expiresAt) {
-        return reply.status(401).send({
-          error: { code: 'UNAUTHORIZED', message: 'Session invalide ou expirée' },
-        });
-      }
-
-      // Hijack the response — Fastify won't try to serialise/end it
-      reply.hijack();
-
-      // Set SSE headers and flush with an initial comment
-      reply.raw.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      });
-      reply.raw.write(':ok\n\n');
-
-      // Register client
-      const clientId = crypto.randomUUID();
-      fastify.sseManager.addClient(clientId, reply);
-
-      // Clean up on disconnect
-      request.raw.on('close', () => {
-        fastify.sseManager.removeClient(clientId);
-      });
-    },
-  );
+    // Cleanup on disconnect
+    request.raw.on('close', () => {
+      fastify.sseManager.removeClient(clientId);
+      fastify.log.info({ clientId }, 'SSE client disconnected');
+    });
+  });
 };
 
 export default eventsRoutes;

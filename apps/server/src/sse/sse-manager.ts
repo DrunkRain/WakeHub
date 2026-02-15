@@ -1,95 +1,75 @@
-import type { FastifyReply } from 'fastify';
+import type { ServerResponse } from 'node:http';
 
 interface SSEClient {
   id: string;
-  reply: FastifyReply;
-  heartbeatInterval: ReturnType<typeof setInterval>;
+  response: ServerResponse;
+  heartbeatTimer: NodeJS.Timeout;
 }
 
-const HEARTBEAT_INTERVAL_MS = 30_000;
+interface BufferedEvent {
+  id: number;
+  event: string;
+  data: string;
+}
 
 export class SSEManager {
-  private clients: Map<string, SSEClient> = new Map();
-  private eventCounter = 0;
+  private clients = new Map<string, SSEClient>();
+  private eventBuffer: BufferedEvent[] = [];
+  private nextEventId = 1;
+  private readonly bufferSize: number;
+  private readonly heartbeatIntervalMs: number;
 
-  /**
-   * Add a new SSE client. Sets up heartbeat and close handler.
-   */
-  addClient(id: string, reply: FastifyReply): void {
-    const heartbeatInterval = setInterval(() => {
-      try {
-        reply.raw.write(': heartbeat\n\n');
-      } catch {
-        this.removeClient(id);
-      }
-    }, HEARTBEAT_INTERVAL_MS);
-
-    this.clients.set(id, { id, reply, heartbeatInterval });
-
-    reply.raw.on('close', () => {
-      this.removeClient(id);
-    });
+  constructor(bufferSize = 100, heartbeatIntervalMs = 30_000) {
+    this.bufferSize = bufferSize;
+    this.heartbeatIntervalMs = heartbeatIntervalMs;
   }
 
-  /**
-   * Remove a client and clean up its heartbeat interval.
-   */
+  addClient(id: string, response: ServerResponse): void {
+    const heartbeatTimer = setInterval(() => {
+      if (!response.destroyed) {
+        response.write(': heartbeat\n\n');
+      }
+    }, this.heartbeatIntervalMs);
+
+    this.clients.set(id, { id, response, heartbeatTimer });
+  }
+
   removeClient(id: string): void {
     const client = this.clients.get(id);
     if (client) {
-      clearInterval(client.heartbeatInterval);
+      clearInterval(client.heartbeatTimer);
       this.clients.delete(id);
     }
   }
 
-  /**
-   * Broadcast an event to all connected clients.
-   */
   broadcast(event: string, data: unknown): void {
-    const eventId = ++this.eventCounter;
-    for (const client of this.clients.values()) {
-      this.writeEvent(client.reply, event, data, eventId);
+    const eventId = this.nextEventId++;
+    const jsonData = JSON.stringify(data);
+
+    // Buffer the event for reconnection replay
+    this.eventBuffer.push({ id: eventId, event, data: jsonData });
+    if (this.eventBuffer.length > this.bufferSize) {
+      this.eventBuffer.shift();
     }
-  }
 
-  /**
-   * Send an event to a specific client.
-   */
-  send(clientId: string, event: string, data: unknown): void {
-    const client = this.clients.get(clientId);
-    if (client) {
-      this.writeEvent(client.reply, event, data, ++this.eventCounter);
-    }
-  }
+    const message = `id: ${eventId}\nevent: ${event}\ndata: ${jsonData}\n\n`;
 
-  /**
-   * Get the number of connected clients.
-   */
-  getClientCount(): number {
-    return this.clients.size;
-  }
-
-  /**
-   * Close all client connections and clean up.
-   */
-  close(): void {
     for (const client of this.clients.values()) {
-      clearInterval(client.heartbeatInterval);
-      try {
-        client.reply.raw.end();
-      } catch {
-        // Client may already be disconnected
+      if (!client.response.destroyed) {
+        client.response.write(message);
       }
     }
-    this.clients.clear();
   }
 
-  private writeEvent(reply: FastifyReply, event: string, data: unknown, id: number): void {
-    try {
-      const payload = `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-      reply.raw.write(payload);
-    } catch {
-      // Client disconnected — will be cleaned up by close handler
+  replayEvents(lastEventId: number, response: ServerResponse): void {
+    for (const buffered of this.eventBuffer) {
+      if (buffered.id > lastEventId) {
+        response.write(`id: ${buffered.id}\nevent: ${buffered.event}\ndata: ${buffered.data}\n\n`);
+      }
     }
+  }
+
+  getClientCount(): number {
+    return this.clients.size;
   }
 }

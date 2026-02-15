@@ -1,223 +1,189 @@
-import { Agent } from 'undici';
-import type { PlatformConnector, DiscoveredResource } from './connector.interface.js';
+import type { Node, NodeStatus, NodeStats, DiscoveredResource } from '@wakehub/shared';
+import type { PlatformConnector } from './connector.interface.js';
+import { ProxmoxClient } from './proxmox-client.js';
 import { PlatformError } from '../utils/platform-error.js';
 
-export interface ProxmoxConfig {
-  apiUrl: string; // e.g. https://192.168.1.10:8006
-  username?: string; // e.g. root@pam
-  password?: string;
-  tokenId?: string; // e.g. root@pam!mytoken
-  tokenSecret?: string;
-  resourceRef?: { node: string; vmid: number; type?: 'qemu' | 'lxc' };
+const PLATFORM = 'proxmox';
+
+interface ProxmoxResource {
+  id: string;
+  type: 'qemu' | 'lxc';
+  vmid: number;
+  name: string;
+  node: string;
+  status: string;
+  template: number;
 }
 
-// Disable TLS verification for self-signed Proxmox certs
-const insecureAgent = new Agent({
-  connect: { rejectUnauthorized: false },
-});
-
 export class ProxmoxConnector implements PlatformConnector {
-  private ticket: string | null = null;
-  private csrfToken: string | null = null;
+  private readonly parentNode: Node;
+  private readonly decryptFn: (ciphertext: string) => string;
 
-  constructor(private readonly config: ProxmoxConfig) {}
-
-  private get baseUrl(): string {
-    return `${this.config.apiUrl}/api2/json`;
+  constructor(parentNode: Node, decryptFn: (ciphertext: string) => string) {
+    this.parentNode = parentNode;
+    this.decryptFn = decryptFn;
   }
 
-  private get isTokenAuth(): boolean {
-    return !!this.config.tokenId && !!this.config.tokenSecret;
-  }
-
-  private async fetchProxmox(
-    path: string,
-    options: { method?: string; body?: Record<string, unknown> } = {},
-  ): Promise<unknown> {
-    const url = `${this.baseUrl}${path}`;
-    const headers: Record<string, string> = {};
-
-    if (this.isTokenAuth) {
-      headers['Authorization'] = `PVEAPIToken=${this.config.tokenId}=${this.config.tokenSecret}`;
-    } else if (this.ticket) {
-      headers['Cookie'] = `PVEAuthCookie=${this.ticket}`;
-      if (this.csrfToken && options.method && options.method !== 'GET') {
-        headers['CSRFPreventionToken'] = this.csrfToken;
-      }
-    }
-
-    const fetchOptions: RequestInit = {
-      method: options.method ?? 'GET',
-      headers,
-      // @ts-expect-error undici dispatcher
-      dispatcher: insecureAgent,
-    };
-
-    if (options.body) {
-      headers['Content-Type'] = 'application/x-www-form-urlencoded';
-      fetchOptions.body = new URLSearchParams(
-        Object.entries(options.body).map(([k, v]) => [k, String(v)] as [string, string]),
-      ).toString();
-    }
-
-    let response: Response;
+  async testConnection(_node: Node): Promise<boolean> {
+    const client = this.createClient();
     try {
-      response = await fetch(url, fetchOptions);
-    } catch (err) {
-      throw new PlatformError(
-        'PROXMOX_NETWORK_ERROR',
-        `Impossible de contacter le serveur Proxmox : ${(err as Error).message}`,
-        'proxmox',
-        { url },
-      );
+      await client.get('/nodes');
+      return true;
+    } catch (error) {
+      throw this.wrapError(error, 'testConnection');
+    } finally {
+      client.destroy();
     }
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new PlatformError(
-        `PROXMOX_HTTP_${response.status}`,
-        `Erreur Proxmox ${response.status} : ${text || response.statusText}`,
-        'proxmox',
-        { status: response.status, url, body: text },
-      );
-    }
-
-    const json = (await response.json()) as { data: unknown };
-    return json.data;
   }
 
-  private async authenticate(): Promise<void> {
-    if (this.isTokenAuth) return;
-    if (this.ticket) return;
-
-    const data = (await this.fetchProxmox('/access/ticket', {
-      method: 'POST',
-      body: {
-        username: this.config.username ?? '',
-        password: this.config.password ?? '',
-      },
-    })) as { ticket: string; CSRFPreventionToken: string };
-
-    this.ticket = data.ticket;
-    this.csrfToken = data.CSRFPreventionToken;
-  }
-
-  async testConnection(): Promise<{ success: boolean; message: string }> {
+  async start(node: Node): Promise<void> {
+    const { pveNode, vmid, vmType } = this.extractPlatformRef(node);
+    const client = this.createClient();
     try {
-      if (this.isTokenAuth) {
-        await this.fetchProxmox('/nodes');
-        return { success: true, message: 'Connexion Proxmox réussie (API token)' };
-      } else {
-        await this.authenticate();
-        return { success: true, message: 'Connexion Proxmox réussie (ticket)' };
-      }
-    } catch (err) {
-      if (err instanceof PlatformError) {
-        return { success: false, message: err.message };
-      }
-      return { success: false, message: `Erreur inattendue : ${(err as Error).message}` };
+      await client.post(`/nodes/${pveNode}/${vmType}/${vmid}/status/start`);
+    } catch (error) {
+      throw new PlatformError(
+        'PROXMOX_START_FAILED',
+        `Impossible de demarrer ${vmType} ${vmid}`,
+        PLATFORM,
+        { node: pveNode, vmid, type: vmType, cause: (error as Error).message },
+      );
+    } finally {
+      client.destroy();
     }
   }
 
-  /** Resolve the Proxmox API kind path from the resourceRef type. Defaults to 'qemu'. */
-  private get apiKind(): 'qemu' | 'lxc' {
-    return this.config.resourceRef?.type ?? 'qemu';
+  async stop(node: Node): Promise<void> {
+    const { pveNode, vmid, vmType } = this.extractPlatformRef(node);
+    const client = this.createClient();
+    try {
+      await client.post(`/nodes/${pveNode}/${vmType}/${vmid}/status/shutdown`);
+    } catch (error) {
+      throw new PlatformError(
+        'PROXMOX_SHUTDOWN_FAILED',
+        `Impossible d'arreter ${vmType} ${vmid}`,
+        PLATFORM,
+        { node: pveNode, vmid, type: vmType, cause: (error as Error).message },
+      );
+    } finally {
+      client.destroy();
+    }
+  }
+
+  async getStatus(node: Node): Promise<NodeStatus> {
+    const { pveNode, vmid, vmType } = this.extractPlatformRef(node);
+    const client = this.createClient();
+    try {
+      const data = await client.get<{ status: string }>(`/nodes/${pveNode}/${vmType}/${vmid}/status/current`);
+      return data.status === 'running' ? 'online' : 'offline';
+    } catch {
+      return 'error';
+    } finally {
+      client.destroy();
+    }
+  }
+
+  async getStats(node: Node): Promise<NodeStats | null> {
+    const { pveNode, vmid, vmType } = this.extractPlatformRef(node);
+    const client = this.createClient();
+    try {
+      const data = await client.get<{
+        cpu: number; maxcpu: number; mem: number; maxmem: number;
+        netin?: number; netout?: number;
+      }>(`/nodes/${pveNode}/${vmType}/${vmid}/status/current`);
+      return {
+        cpuUsage: data.cpu,
+        ramUsage: data.maxmem > 0 ? data.mem / data.maxmem : 0,
+        ...(data.netin !== undefined && data.netout !== undefined
+          ? { rxBytes: data.netin, txBytes: data.netout }
+          : {}),
+      };
+    } catch {
+      return null;
+    } finally {
+      client.destroy();
+    }
   }
 
   async listResources(): Promise<DiscoveredResource[]> {
-    await this.authenticate();
-
-    const nodes = (await this.fetchProxmox('/nodes')) as Array<{ node: string }>;
-    const results: DiscoveredResource[] = [];
-
-    for (const n of nodes) {
-      // Discover QEMU VMs
-      const vms = (await this.fetchProxmox(`/nodes/${n.node}/qemu`)) as Array<{
-        vmid: number;
-        name?: string;
-        status: string;
-      }>;
-
-      for (const vm of vms) {
-        results.push({
-          name: vm.name ?? `VM ${vm.vmid}`,
-          type: 'vm',
-          platformRef: { node: n.node, vmid: vm.vmid, type: 'qemu' as const },
-          status: mapProxmoxStatus(vm.status),
-        });
-      }
-
-      // Discover LXC containers
-      const cts = (await this.fetchProxmox(`/nodes/${n.node}/lxc`)) as Array<{
-        vmid: number;
-        name?: string;
-        status: string;
-      }>;
-
-      for (const ct of cts) {
-        results.push({
-          name: ct.name ?? `CT ${ct.vmid}`,
-          type: 'container',
-          platformRef: { node: n.node, vmid: ct.vmid, type: 'lxc' as const },
-          status: mapProxmoxStatus(ct.status),
-        });
-      }
-    }
-
-    return results;
-  }
-
-  async start(): Promise<void> {
-    const ref = this.config.resourceRef;
-    if (!ref) throw new PlatformError('PROXMOX_NO_REF', 'resourceRef requis pour start', 'proxmox');
-
-    await this.authenticate();
-    await this.fetchProxmox(`/nodes/${ref.node}/${this.apiKind}/${ref.vmid}/status/start`, {
-      method: 'POST',
-    });
-  }
-
-  async stop(): Promise<void> {
-    const ref = this.config.resourceRef;
-    if (!ref) throw new PlatformError('PROXMOX_NO_REF', 'resourceRef requis pour stop', 'proxmox');
-
-    await this.authenticate();
-    await this.fetchProxmox(`/nodes/${ref.node}/${this.apiKind}/${ref.vmid}/status/stop`, {
-      method: 'POST',
-    });
-  }
-
-  async getStatus(): Promise<'online' | 'offline' | 'unknown' | 'error'> {
-    const ref = this.config.resourceRef;
-    if (!ref) return 'unknown';
-
+    const client = this.createClient();
     try {
-      await this.authenticate();
-      const data = (await this.fetchProxmox(
-        `/nodes/${ref.node}/${this.apiKind}/${ref.vmid}/status/current`,
-      )) as { status: string };
-
-      const s = mapProxmoxStatus(data.status);
-      if (s === 'running') return 'online';
-      if (s === 'stopped' || s === 'paused') return 'offline';
-      return 'unknown';
-    } catch {
-      return 'error';
+      const resources = await client.get<ProxmoxResource[]>('/cluster/resources?type=vm');
+      return resources
+        .filter((r) => r.template !== 1)
+        .map((r) => ({
+          vmid: r.vmid,
+          name: r.name,
+          node: r.node,
+          type: r.type,
+          status: r.status,
+        }));
+    } catch (error) {
+      throw new PlatformError(
+        'PROXMOX_DISCOVERY_FAILED',
+        'Impossible de lister les ressources Proxmox',
+        PLATFORM,
+        { cause: (error as Error).message },
+      );
+    } finally {
+      client.destroy();
     }
   }
-}
 
-function mapProxmoxStatus(
-  status: string,
-): 'running' | 'stopped' | 'paused' | 'unknown' | 'error' {
-  switch (status) {
-    case 'running':
-      return 'running';
-    case 'stopped':
-      return 'stopped';
-    case 'paused':
-      return 'paused';
-    default:
-      return 'unknown';
+  private createClient(): ProxmoxClient {
+    const proxCap = this.parentNode.capabilities?.proxmox_api;
+    if (!proxCap) {
+      throw new PlatformError('PROXMOX_AUTH_FAILED', 'No Proxmox capability configured on parent node', PLATFORM);
+    }
+
+    if (proxCap.authType === 'token') {
+      const tokenSecret = proxCap.tokenSecretEncrypted ? this.decryptFn(proxCap.tokenSecretEncrypted) : undefined;
+      return new ProxmoxClient({
+        host: proxCap.host,
+        port: proxCap.port,
+        verifySsl: proxCap.verifySsl,
+        authType: 'token',
+        tokenId: proxCap.tokenId,
+        tokenSecret,
+      });
+    }
+
+    // Password auth
+    const password = proxCap.passwordEncrypted ? this.decryptFn(proxCap.passwordEncrypted) : undefined;
+    return new ProxmoxClient({
+      host: proxCap.host,
+      port: proxCap.port,
+      verifySsl: proxCap.verifySsl,
+      authType: 'password',
+      username: proxCap.username,
+      password,
+    });
+  }
+
+  private extractPlatformRef(node: Node): { pveNode: string; vmid: number; vmType: 'qemu' | 'lxc' } {
+    const ref = node.platformRef;
+    if (!ref?.node || !ref.vmid || !ref.type) {
+      throw new PlatformError(
+        'PROXMOX_VM_NOT_FOUND',
+        `Missing platformRef on node ${node.id}`,
+        PLATFORM,
+        { nodeId: node.id },
+      );
+    }
+    return { pveNode: ref.node, vmid: ref.vmid, vmType: ref.type };
+  }
+
+  private wrapError(error: unknown, operation: string): PlatformError {
+    const message = (error as Error).message ?? String(error);
+
+    if (message.includes('401') || message.includes('403')) {
+      return new PlatformError('PROXMOX_AUTH_FAILED', 'Identifiants Proxmox invalides', PLATFORM);
+    }
+    if (message.includes('ECONNREFUSED') || message.includes('ETIMEDOUT') || message.includes('ENOTFOUND')) {
+      const host = this.parentNode.capabilities?.proxmox_api?.host ?? 'unknown';
+      const port = this.parentNode.capabilities?.proxmox_api?.port ?? 8006;
+      return new PlatformError('PROXMOX_UNREACHABLE', `API Proxmox injoignable a ${host}:${port}`, PLATFORM, { host, port });
+    }
+    return new PlatformError('PROXMOX_API_ERROR', `Erreur API Proxmox (${operation}): ${message}`, PLATFORM);
   }
 }

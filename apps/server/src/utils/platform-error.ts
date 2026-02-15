@@ -1,9 +1,9 @@
 export class PlatformError extends Error {
   constructor(
-    public code: string,
+    public readonly code: string,
     message: string,
-    public platform: string,
-    public details?: unknown,
+    public readonly platform: string,
+    public readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'PlatformError';

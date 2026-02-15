@@ -1,401 +1,174 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { userEvent } from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { theme } from '../../theme/theme';
-import { ServiceTile } from './service-tile';
-import type { Service, CascadeRecord } from '@wakehub/shared';
+import { ServiceTile, type ServiceTileProps } from './service-tile';
+import { useCascadeStore } from '../../stores/cascade.store';
 
-function renderWithProviders(ui: React.ReactElement, queryClient?: QueryClient) {
-  const qc = queryClient ?? new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MantineProvider theme={theme} defaultColorScheme="dark">
-        {ui}
-      </MantineProvider>
-    </QueryClientProvider>,
-  );
+function renderTile(props: Partial<ServiceTileProps> = {}) {
+  const defaultProps: ServiceTileProps = {
+    node: {
+      id: 'node-1',
+      name: 'Mon Serveur',
+      type: 'physical',
+      status: 'offline',
+      serviceUrl: null,
+      isPinned: true,
+    },
+    dependencyCount: 3,
+    onStartCascade: vi.fn(),
+    onTogglePin: vi.fn(),
+    ...props,
+  };
+
+  return {
+    ...render(
+      <MantineProvider>
+        <ServiceTile {...defaultProps} />
+      </MantineProvider>,
+    ),
+    props: defaultProps,
+  };
 }
 
-const baseChildService: Service = {
-  id: 'r1',
-  name: 'Jellyfin',
-  type: 'vm',
-  ipAddress: null,
-  macAddress: null,
-  sshUser: null,
-  apiUrl: null,
-  serviceUrl: 'http://jellyfin:8096',
-  status: 'running',
-  platformRef: { node: 'pve1', vmid: 100 },
-  inactivityTimeout: null,
-  parentId: 'm1',
-  pinnedToDashboard: true,
-  createdAt: '2026-01-01T00:00:00Z',
-  updatedAt: '2026-01-01T00:00:00Z',
-};
-
-const baseParentService: Service = {
-  id: 'm1',
-  name: 'NAS Server',
-  type: 'physical',
-  ipAddress: '192.168.1.10',
-  macAddress: 'AA:BB:CC:DD:EE:FF',
-  sshUser: 'admin',
-  apiUrl: null,
-  serviceUrl: 'http://nas:5000',
-  status: 'online',
-  platformRef: null,
-  inactivityTimeout: null,
-  parentId: null,
-  pinnedToDashboard: true,
-  createdAt: '2026-01-01T00:00:00Z',
-  updatedAt: '2026-01-01T00:00:00Z',
-};
-
-describe('ServiceTile — Child service (VM)', () => {
-  it('renders service name and type', () => {
-    renderWithProviders(
-      <ServiceTile service={baseChildService} onStart={vi.fn()} />,
-    );
-
-    expect(screen.getByText('Jellyfin')).toBeInTheDocument();
-    expect(screen.getByText('VM')).toBeInTheDocument();
+describe('ServiceTile', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    useCascadeStore.setState({ cascades: {} });
   });
 
-  it('shows "Actif" badge when running', () => {
-    renderWithProviders(
-      <ServiceTile service={baseChildService} onStart={vi.fn()} />,
-    );
-
-    expect(screen.getByText('Actif')).toBeInTheDocument();
+  it('should render node name and dependency count', () => {
+    renderTile();
+    expect(screen.getByText('Mon Serveur')).toBeInTheDocument();
+    expect(screen.getByText('3 dépendances')).toBeInTheDocument();
   });
 
-  it('shows "Ouvrir" button when running with serviceUrl', () => {
-    renderWithProviders(
-      <ServiceTile service={baseChildService} onStart={vi.fn()} />,
-    );
-
-    const openBtn = screen.getByRole('link', { name: /Ouvrir Jellyfin/ });
-    expect(openBtn).toBeInTheDocument();
-    expect(openBtn).toHaveAttribute('href', 'http://jellyfin:8096');
-    expect(openBtn).toHaveAttribute('target', '_blank');
+  it('should use singular "dépendance" for count of 1', () => {
+    renderTile({ dependencyCount: 1 });
+    expect(screen.getByText('1 dépendance')).toBeInTheDocument();
   });
 
-  it('shows "Démarrer" button when stopped', () => {
-    const stopped = { ...baseChildService, status: 'stopped' as const };
-    renderWithProviders(
-      <ServiceTile service={stopped} onStart={vi.fn()} />,
-    );
-
-    expect(screen.getByText('Éteint')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Démarrer Jellyfin/ })).toBeInTheDocument();
+  it('should render "Démarrer" button for offline nodes', () => {
+    renderTile({ node: { id: 'n1', name: 'S1', type: 'physical', status: 'offline', serviceUrl: null, isPinned: true } });
+    expect(screen.getByRole('button', { name: /Démarrer S1/i })).toBeInTheDocument();
   });
 
-  it('calls onStart when "Démarrer" is clicked', async () => {
-    const onStart = vi.fn();
-    const stopped = { ...baseChildService, status: 'stopped' as const };
-    renderWithProviders(
-      <ServiceTile service={stopped} onStart={onStart} />,
-    );
-
-    const btn = screen.getByRole('button', { name: /Démarrer Jellyfin/ });
-    await userEvent.click(btn);
-
-    expect(onStart).toHaveBeenCalledWith('r1');
+  it('should render "Ouvrir" button for online nodes with serviceUrl', () => {
+    renderTile({ node: { id: 'n1', name: 'S1', type: 'physical', status: 'online', serviceUrl: 'https://example.com', isPinned: true } });
+    expect(screen.getByRole('button', { name: /Ouvrir S1/i })).toBeInTheDocument();
   });
 
-  it('shows "En démarrage" badge when cascade is active (start)', () => {
-    const activeCascade: CascadeRecord = {
-      id: 'c1',
-      serviceId: 'r1',
-      type: 'start',
-      status: 'in_progress',
-      currentStep: 1,
-      totalSteps: 3,
-      failedStep: null,
-      errorCode: null,
-      errorMessage: null,
-      startedAt: '2026-01-01T00:00:00Z',
-      completedAt: null,
-    };
-
-    renderWithProviders(
-      <ServiceTile
-        service={{ ...baseChildService, status: 'stopped' }}
-        activeCascade={activeCascade}
-        onStart={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText('En démarrage')).toBeInTheDocument();
+  it('should not render action button for online nodes without serviceUrl', () => {
+    renderTile({ node: { id: 'n1', name: 'S1', type: 'physical', status: 'online', serviceUrl: null, isPinned: true } });
+    expect(screen.queryByRole('button', { name: /Ouvrir/i })).not.toBeInTheDocument();
   });
 
-  it('shows "Réessayer" button when cascade failed', () => {
-    const failedCascade: CascadeRecord = {
-      id: 'c1',
-      serviceId: 'r1',
-      type: 'start',
-      status: 'failed',
-      currentStep: 2,
-      totalSteps: 3,
-      failedStep: 2,
-      errorCode: 'SSH_FAILED',
-      errorMessage: 'Connexion SSH impossible',
-      startedAt: '2026-01-01T00:00:00Z',
-      completedAt: '2026-01-01T00:01:00Z',
-    };
-
-    renderWithProviders(
-      <ServiceTile
-        service={{ ...baseChildService, status: 'stopped' }}
-        activeCascade={failedCascade}
-        onStart={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText('Erreur')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Réessayer Jellyfin/ })).toBeInTheDocument();
-    expect(screen.getByText(/Connexion SSH impossible/)).toBeInTheDocument();
+  it('should render "Réessayer" button for error nodes', () => {
+    renderTile({ node: { id: 'n1', name: 'S1', type: 'physical', status: 'error', serviceUrl: null, isPinned: true } });
+    expect(screen.getByRole('button', { name: /Réessayer S1/i })).toBeInTheDocument();
   });
 
-  it('has correct accessibility attributes', () => {
-    renderWithProviders(
-      <ServiceTile service={baseChildService} onStart={vi.fn()} />,
-    );
-
-    const card = screen.getByRole('article');
-    expect(card).toHaveAttribute('aria-label', 'Service Jellyfin — Actif');
+  it('should render disabled button for starting nodes', () => {
+    renderTile({ node: { id: 'n1', name: 'S1', type: 'physical', status: 'starting', serviceUrl: null, isPinned: true } });
+    const btn = screen.getByText('Démarrage…');
+    expect(btn.closest('button')).toBeDisabled();
   });
 
-  it('shows container type for container services', () => {
-    const container = { ...baseChildService, type: 'container' as const };
-    renderWithProviders(
-      <ServiceTile service={container} onStart={vi.fn()} />,
-    );
+  it('should call onStartCascade when "Démarrer" is clicked', async () => {
+    const onStartCascade = vi.fn();
+    renderTile({
+      node: { id: 'node-42', name: 'S1', type: 'physical', status: 'offline', serviceUrl: null, isPinned: true },
+      onStartCascade,
+    });
 
-    expect(screen.getByText('Conteneur')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Démarrer S1/i }));
+    expect(onStartCascade).toHaveBeenCalledWith('node-42');
   });
 
-  it('calls onUnpin when unpin button is clicked', async () => {
-    const onUnpin = vi.fn();
-    renderWithProviders(
-      <ServiceTile service={baseChildService} onStart={vi.fn()} onUnpin={onUnpin} />,
-    );
+  it('should call onTogglePin when pin button is clicked', async () => {
+    const onTogglePin = vi.fn();
+    renderTile({
+      node: { id: 'node-42', name: 'S1', type: 'physical', status: 'offline', serviceUrl: null, isPinned: true },
+      onTogglePin,
+    });
 
-    const btn = screen.getByRole('button', { name: /Désépingler Jellyfin/ });
-    await userEvent.click(btn);
-
-    expect(onUnpin).toHaveBeenCalledWith('r1');
-  });
-});
-
-describe('ServiceTile — Parent service (Physical)', () => {
-  it('renders service name and type', () => {
-    renderWithProviders(
-      <ServiceTile service={baseParentService} />,
-    );
-
-    expect(screen.getByText('NAS Server')).toBeInTheDocument();
-    expect(screen.getByText('Physique')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Désépingler S1/i }));
+    expect(onTogglePin).toHaveBeenCalledWith('node-42', false);
   });
 
-  it('shows "Actif" badge for online service', () => {
-    renderWithProviders(
-      <ServiceTile service={baseParentService} />,
-    );
-
-    expect(screen.getByText('Actif')).toBeInTheDocument();
+  it('should have role="article" and aria-label', () => {
+    renderTile({ node: { id: 'n1', name: 'MyNode', type: 'physical', status: 'online', serviceUrl: null, isPinned: false } });
+    const article = screen.getByRole('article');
+    expect(article).toHaveAttribute('aria-label', 'MyNode — online');
   });
 
-  it('shows "Ouvrir" for online service with serviceUrl', () => {
-    renderWithProviders(
-      <ServiceTile service={baseParentService} />,
-    );
+  it('should open serviceUrl in new tab when "Ouvrir" is clicked', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    renderTile({ node: { id: 'n1', name: 'S1', type: 'physical', status: 'online', serviceUrl: 'https://service.local', isPinned: true } });
 
-    const openBtn = screen.getByRole('link', { name: /Ouvrir NAS Server/ });
-    expect(openBtn).toBeInTheDocument();
-    expect(openBtn).toHaveAttribute('href', 'http://nas:5000');
+    await userEvent.click(screen.getByRole('button', { name: /Ouvrir S1/i }));
+    expect(openSpy).toHaveBeenCalledWith('https://service.local', '_blank', 'noopener,noreferrer');
   });
 
-  it('shows "Éteint" for offline service', () => {
-    renderWithProviders(
-      <ServiceTile service={{ ...baseParentService, status: 'offline' }} />,
-    );
+  it('should render CascadeProgress when cascade is active for this node', () => {
+    useCascadeStore.setState({
+      cascades: {
+        'node-1': {
+          cascadeId: 'c-1',
+          step: 2,
+          totalSteps: 5,
+          currentNodeName: 'NAS-Storage',
+          status: 'in_progress',
+        },
+      },
+    });
 
-    expect(screen.getByText('Éteint')).toBeInTheDocument();
+    renderTile({ node: { id: 'node-1', name: 'Mon Serveur', type: 'physical', status: 'starting', serviceUrl: null, isPinned: true } });
+    expect(screen.getByText('NAS-Storage')).toBeInTheDocument();
+    expect(screen.getAllByRole('progressbar').length).toBeGreaterThan(0);
   });
 
-  it('calls onUnpin when unpin button is clicked', async () => {
-    const onUnpin = vi.fn();
-    renderWithProviders(
-      <ServiceTile service={baseParentService} onUnpin={onUnpin} />,
-    );
-
-    const btn = screen.getByRole('button', { name: /Désépingler NAS Server/ });
-    await userEvent.click(btn);
-
-    expect(onUnpin).toHaveBeenCalledWith('m1');
+  it('should not render CascadeProgress when no cascade is active', () => {
+    renderTile();
+    expect(screen.queryByText('NAS-Storage')).not.toBeInTheDocument();
   });
 
-  it('does not show unpin button when onUnpin is not provided', () => {
-    renderWithProviders(
-      <ServiceTile service={baseParentService} />,
-    );
-
-    expect(screen.queryByRole('button', { name: /Désépingler/ })).not.toBeInTheDocument();
-  });
-});
-
-describe('ServiceTile — onTileClick & stopPropagation', () => {
-  it('calls onTileClick when card is clicked', async () => {
-    const onTileClick = vi.fn();
-    renderWithProviders(
-      <ServiceTile
-        service={baseChildService}
-        onStart={vi.fn()}
-        onTileClick={onTileClick}
-      />,
-    );
+  it('should call onCardClick when card is clicked', async () => {
+    const onCardClick = vi.fn();
+    renderTile({
+      node: { id: 'node-42', name: 'S1', type: 'physical', status: 'offline', serviceUrl: null, isPinned: true },
+      onCardClick,
+    });
 
     await userEvent.click(screen.getByRole('article'));
-    expect(onTileClick).toHaveBeenCalledWith('r1');
+    expect(onCardClick).toHaveBeenCalledWith('node-42');
   });
 
-  it('does not call onTileClick when action button is clicked (stopPropagation)', async () => {
-    const onTileClick = vi.fn();
-    const onStart = vi.fn();
-    const stopped = { ...baseChildService, status: 'stopped' as const };
-    renderWithProviders(
-      <ServiceTile
-        service={stopped}
-        onStart={onStart}
-        onTileClick={onTileClick}
-      />,
-    );
-
-    await userEvent.click(screen.getByRole('button', { name: /Démarrer Jellyfin/ }));
-    expect(onStart).toHaveBeenCalledWith('r1');
-    expect(onTileClick).not.toHaveBeenCalled();
-  });
-
-  it('does not call onTileClick when unpin button is clicked', async () => {
-    const onTileClick = vi.fn();
-    const onUnpin = vi.fn();
-    renderWithProviders(
-      <ServiceTile
-        service={baseChildService}
-        onStart={vi.fn()}
-        onTileClick={onTileClick}
-        onUnpin={onUnpin}
-      />,
-    );
-
-    await userEvent.click(screen.getByRole('button', { name: /Désépingler Jellyfin/ }));
-    expect(onUnpin).toHaveBeenCalledWith('r1');
-    expect(onTileClick).not.toHaveBeenCalled();
-  });
-
-  it('does not render clickable style when onTileClick is not provided', () => {
-    renderWithProviders(
-      <ServiceTile service={baseChildService} onStart={vi.fn()} />,
-    );
-
-    const card = screen.getByRole('article');
-    expect(card).not.toHaveStyle({ cursor: 'pointer' });
-  });
-});
-
-describe('ServiceTile — CascadeProgress Integration', () => {
-  it('renders progress bar with dependency name when cascade in progress', () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(['cascade', 'progress', 'r1'], {
-      cascadeId: 'c1',
-      serviceId: 'r1',
-      step: 2,
-      totalSteps: 4,
-      currentDependency: { id: 'd1', name: 'NAS Server', status: 'starting' },
-      status: 'in_progress',
+  it('should NOT call onCardClick when action button is clicked', async () => {
+    const onCardClick = vi.fn();
+    const onStartCascade = vi.fn();
+    renderTile({
+      node: { id: 'node-42', name: 'S1', type: 'physical', status: 'offline', serviceUrl: null, isPinned: true },
+      onCardClick,
+      onStartCascade,
     });
 
-    const activeCascade: CascadeRecord = {
-      id: 'c1', serviceId: 'r1', type: 'start', status: 'in_progress',
-      currentStep: 2, totalSteps: 4, failedStep: null,
-      errorCode: null, errorMessage: null,
-      startedAt: '2026-01-01T00:00:00Z', completedAt: null,
-    };
-
-    renderWithProviders(
-      <ServiceTile
-        service={{ ...baseChildService, status: 'stopped' }}
-        activeCascade={activeCascade}
-        onStart={vi.fn()}
-      />,
-      queryClient,
-    );
-
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toBeInTheDocument();
-    expect(bar).toHaveAttribute('aria-valuenow', '50');
-    expect(screen.getByText('NAS Server')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Démarrer S1/i }));
+    expect(onStartCascade).toHaveBeenCalledWith('node-42');
+    expect(onCardClick).not.toHaveBeenCalled();
   });
 
-  it('renders green 100% progress bar on cascade completion', () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(['cascade', 'progress', 'r1'], {
-      cascadeId: 'c1',
-      serviceId: 'r1',
-      step: 3,
-      totalSteps: 3,
-      currentDependency: null,
-      status: 'completed',
+  it('should NOT call onCardClick when pin button is clicked', async () => {
+    const onCardClick = vi.fn();
+    const onTogglePin = vi.fn();
+    renderTile({
+      node: { id: 'node-42', name: 'S1', type: 'physical', status: 'offline', serviceUrl: null, isPinned: true },
+      onCardClick,
+      onTogglePin,
     });
 
-    renderWithProviders(
-      <ServiceTile
-        service={{ ...baseChildService, status: 'running' }}
-        onStart={vi.fn()}
-      />,
-      queryClient,
-    );
-
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toBeInTheDocument();
-    expect(bar).toHaveAttribute('aria-valuenow', '100');
-    expect(screen.getByText('Terminé')).toBeInTheDocument();
-  });
-
-  it('renders red progress bar on cascade failure', () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(['cascade', 'progress', 'r1'], {
-      cascadeId: 'c1',
-      serviceId: 'r1',
-      step: 2,
-      totalSteps: 4,
-      currentDependency: { id: 'd1', name: 'Docker Host', status: 'error' },
-      status: 'failed',
-    });
-
-    const failedCascade: CascadeRecord = {
-      id: 'c1', serviceId: 'r1', type: 'start', status: 'failed',
-      currentStep: 2, totalSteps: 4, failedStep: 2,
-      errorCode: 'SSH_FAILED', errorMessage: 'Connexion SSH impossible',
-      startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:01:00Z',
-    };
-
-    renderWithProviders(
-      <ServiceTile
-        service={{ ...baseChildService, status: 'stopped' }}
-        activeCascade={failedCascade}
-        onStart={vi.fn()}
-      />,
-      queryClient,
-    );
-
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toBeInTheDocument();
-    expect(bar).toHaveAttribute('aria-valuenow', '50');
-    expect(screen.getByText('Docker Host')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Désépingler S1/i }));
+    expect(onTogglePin).toHaveBeenCalled();
+    expect(onCardClick).not.toHaveBeenCalled();
   });
 });

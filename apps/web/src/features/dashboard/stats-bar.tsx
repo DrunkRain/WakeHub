@@ -1,77 +1,47 @@
-import { SimpleGrid, Paper, Group, Text, ThemeIcon } from '@mantine/core';
-import {
-  IconActivity,
-  IconBolt,
-  IconClock,
-  IconMoon,
-} from '@tabler/icons-react';
-import { useStats } from '../../api/cascades.api';
+import { SimpleGrid, Paper, Text, Skeleton } from '@mantine/core';
+import { useStats } from '../../api/stats.api';
 
-interface StatTileProps {
-  icon: React.ReactNode;
-  value: string | number;
-  label: string;
-  color: string;
-}
-
-function StatTile({ icon, value, label, color }: StatTileProps) {
-  return (
-    <Paper p="md" radius="md" withBorder>
-      <Group>
-        <ThemeIcon size="lg" radius="md" variant="light" color={color}>
-          {icon}
-        </ThemeIcon>
-        <div>
-          <Text size="xl" fw={700} lh={1}>
-            {value}
-          </Text>
-          <Text size="xs" c="dimmed" mt={4}>
-            {label}
-          </Text>
-        </div>
-      </Group>
-    </Paper>
-  );
-}
-
-function formatSeconds(seconds: number): string {
-  if (seconds === 0) return '—';
+function formatDuration(ms: number | null): string {
+  if (ms === null) return '—';
+  const seconds = Math.round(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
-  const min = Math.floor(seconds / 60);
-  const sec = seconds % 60;
-  return sec > 0 ? `${min}m ${sec}s` : `${min}m`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}m${remainder > 0 ? ` ${remainder}s` : ''}`;
 }
 
 export function StatsBar() {
-  const { data } = useStats();
+  const { data, isLoading } = useStats();
   const stats = data?.data;
 
+  if (isLoading) {
+    return (
+      <SimpleGrid cols={{ base: 2, md: 4 }} mb="lg">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Paper key={i} p="md" withBorder>
+            <Skeleton height={16} width="60%" mb="xs" />
+            <Skeleton height={28} width="40%" />
+          </Paper>
+        ))}
+      </SimpleGrid>
+    );
+  }
+
+  const tiles = [
+    { label: 'Noeuds actifs', value: stats ? `${stats.nodesOnline}/${stats.nodesTotal}` : '—' },
+    { label: 'Cascades du jour', value: stats ? String(stats.cascadesToday) : '—' },
+    { label: 'Temps moyen cascade', value: stats ? formatDuration(stats.avgCascadeDurationMs) : '—' },
+    { label: "Heures d'inactivité", value: '—' },
+  ];
+
   return (
-    <SimpleGrid cols={{ base: 2, md: 4 }} spacing="lg">
-      <StatTile
-        icon={<IconActivity size={20} />}
-        value={stats?.activeServices ?? 0}
-        label="Services actifs"
-        color="green"
-      />
-      <StatTile
-        icon={<IconBolt size={20} />}
-        value={stats?.cascadesToday ?? 0}
-        label="Cascades aujourd'hui"
-        color="blue"
-      />
-      <StatTile
-        icon={<IconClock size={20} />}
-        value={formatSeconds(stats?.avgCascadeTime ?? 0)}
-        label="Temps moyen"
-        color="yellow"
-      />
-      <StatTile
-        icon={<IconMoon size={20} />}
-        value={stats?.inactivityHours ?? 0}
-        label="Heures d'inactivité"
-        color="gray"
-      />
+    <SimpleGrid cols={{ base: 2, md: 4 }} mb="lg">
+      {tiles.map((tile) => (
+        <Paper key={tile.label} p="md" withBorder>
+          <Text size="sm" c="dimmed">{tile.label}</Text>
+          <Text size="xl" fw={700}>{tile.value}</Text>
+        </Paper>
+      ))}
     </SimpleGrid>
   );
 }

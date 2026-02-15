@@ -1,52 +1,45 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { DependencyLink, DependencyNodeType, DependencyChainNode, GraphNode, GraphEdge } from '@wakehub/shared';
 import { apiFetch } from './api-fetch';
+import type { DependencyNodeInfo, DependencyGraphResponse } from '@wakehub/shared';
+
+const API_BASE = '/api/dependencies';
 
 interface ErrorResponse {
   error: {
     code: string;
     message: string;
+    details?: unknown;
   };
 }
 
-interface DependencyListResponse {
-  data: DependencyLink[];
-}
-
-interface DependencyResponse {
-  data: DependencyLink;
-}
-
-interface DependencyChainResponse {
+interface DependenciesResponse {
   data: {
-    upstream: DependencyChainNode[];
-    downstream: DependencyChainNode[];
+    upstream: DependencyNodeInfo[];
+    downstream: DependencyNodeInfo[];
   };
 }
 
-interface CreateDependencyRequest {
-  parentType: DependencyNodeType;
-  parentId: string;
-  childType: DependencyNodeType;
-  childId: string;
-  isShared?: boolean;
+interface CreateDependencyResponse {
+  data: {
+    dependency: {
+      id: string;
+      fromNodeId: string;
+      toNodeId: string;
+      createdAt: string;
+    };
+  };
 }
 
-interface UpdateDependencyRequest {
-  id: string;
-  isShared: boolean;
-}
-
-export function useNodeDependencies(nodeType: DependencyNodeType, nodeId: string) {
-  return useQuery<DependencyListResponse, ErrorResponse>({
-    queryKey: ['dependencies', nodeType, nodeId],
+export function useDependencies(nodeId: string) {
+  return useQuery<DependenciesResponse, ErrorResponse>({
+    queryKey: ['dependencies', nodeId],
     queryFn: async () => {
-      const response = await apiFetch(
-        `/api/dependencies?nodeType=${nodeType}&nodeId=${nodeId}`,
-      );
+      const response = await apiFetch(`${API_BASE}?nodeId=${encodeURIComponent(nodeId)}`);
       const json = await response.json();
-      if (!response.ok) throw json as ErrorResponse;
-      return json as DependencyListResponse;
+      if (!response.ok) {
+        throw json as ErrorResponse;
+      }
+      return json as DependenciesResponse;
     },
     enabled: !!nodeId,
   });
@@ -55,19 +48,39 @@ export function useNodeDependencies(nodeType: DependencyNodeType, nodeId: string
 export function useCreateDependency() {
   const queryClient = useQueryClient();
 
-  return useMutation<DependencyResponse, ErrorResponse, CreateDependencyRequest>({
+  return useMutation<CreateDependencyResponse, ErrorResponse, { fromNodeId: string; toNodeId: string }>({
     mutationFn: async (data) => {
-      const response = await apiFetch('/api/dependencies', {
+      const response = await apiFetch(API_BASE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       });
       const json = await response.json();
-      if (!response.ok) throw json as ErrorResponse;
-      return json as DependencyResponse;
+      if (!response.ok) {
+        throw json as ErrorResponse;
+      }
+      return json as CreateDependencyResponse;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dependencies'] });
+    },
+  });
+}
+
+interface DependencyGraphApiResponse {
+  data: DependencyGraphResponse;
+}
+
+export function useDependencyGraph() {
+  return useQuery<DependencyGraphApiResponse, ErrorResponse>({
+    queryKey: ['dependencies', 'graph'],
+    queryFn: async () => {
+      const response = await apiFetch(`${API_BASE}/graph`);
+      const json = await response.json();
+      if (!response.ok) {
+        throw json as ErrorResponse;
+      }
+      return json as DependencyGraphApiResponse;
     },
   });
 }
@@ -76,70 +89,18 @@ export function useDeleteDependency() {
   const queryClient = useQueryClient();
 
   return useMutation<{ data: { success: boolean } }, ErrorResponse, string>({
-    mutationFn: async (id) => {
-      const response = await apiFetch(`/api/dependencies/${id}`, {
+    mutationFn: async (dependencyId) => {
+      const response = await apiFetch(`${API_BASE}/${dependencyId}`, {
         method: 'DELETE',
       });
       const json = await response.json();
-      if (!response.ok) throw json as ErrorResponse;
+      if (!response.ok) {
+        throw json as ErrorResponse;
+      }
       return json as { data: { success: boolean } };
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dependencies'] });
     },
-  });
-}
-
-export function useUpdateDependency() {
-  const queryClient = useQueryClient();
-
-  return useMutation<DependencyResponse, ErrorResponse, UpdateDependencyRequest>({
-    mutationFn: async ({ id, isShared }) => {
-      const response = await apiFetch(`/api/dependencies/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isShared }),
-      });
-      const json = await response.json();
-      if (!response.ok) throw json as ErrorResponse;
-      return json as DependencyResponse;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['dependencies'] });
-    },
-  });
-}
-
-interface DependencyGraphResponse {
-  data: {
-    nodes: GraphNode[];
-    edges: GraphEdge[];
-  };
-}
-
-export function useDependencyGraph() {
-  return useQuery<DependencyGraphResponse, ErrorResponse>({
-    queryKey: ['dependencies', 'graph'],
-    queryFn: async () => {
-      const response = await apiFetch('/api/dependencies/graph');
-      const json = await response.json();
-      if (!response.ok) throw json as ErrorResponse;
-      return json as DependencyGraphResponse;
-    },
-  });
-}
-
-export function useDependencyChain(nodeType: DependencyNodeType, nodeId: string) {
-  return useQuery<DependencyChainResponse, ErrorResponse>({
-    queryKey: ['dependencies', 'chain', nodeType, nodeId],
-    queryFn: async () => {
-      const response = await apiFetch(
-        `/api/dependencies/chain?nodeType=${nodeType}&nodeId=${nodeId}`,
-      );
-      const json = await response.json();
-      if (!response.ok) throw json as ErrorResponse;
-      return json as DependencyChainResponse;
-    },
-    enabled: !!nodeId,
   });
 }

@@ -4,6 +4,7 @@ import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { eq } from 'drizzle-orm';
 import { users, operationLogs, sessions } from '../db/schema.js';
 import { extractSessionToken } from '../middleware/auth.middleware.js';
+import { config } from '../config.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -140,13 +141,13 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Log the operation
       await fastify.db.insert(operationLogs).values({
-        id: crypto.randomUUID(),
         timestamp: new Date(),
         level: 'info',
         source: 'auth',
         message: `User created: ${username}`,
         reason: 'first-time-setup',
         details: { userId, username },
+        eventType: 'register',
       });
 
       // Log via pino
@@ -165,7 +166,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       // Set HTTP-only cookie with session token
       reply.setCookie('session_token', token, {
         httpOnly: true,
-        secure: process.env['NODE_ENV'] === 'production',
+        secure: config.cookieSecure,
         sameSite: 'lax',
         path: '/',
         maxAge: 30 * 24 * 60 * 60, // 30 days in seconds
@@ -273,7 +274,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       // Set HTTP-only cookie with session token
       reply.setCookie('session_token', token, {
         httpOnly: true,
-        secure: process.env['NODE_ENV'] === 'production',
+        secure: config.cookieSecure,
         sameSite: 'lax',
         path: '/',
         maxAge: Math.floor(sessionDuration / 1000), // Convert to seconds
@@ -287,6 +288,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         message: `User logged in: ${username}`,
         reason: null,
         details: { userId: user.id, username, rememberMe },
+        eventType: 'login',
       });
 
       fastify.log.info({ userId: user.id, username }, 'User logged in');
@@ -317,6 +319,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         message: 'User logged out',
         reason: null,
         details: null,
+        eventType: 'logout',
       });
 
       fastify.log.info('User logged out');
@@ -505,6 +508,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         message: `Password reset for user: ${username}`,
         reason: 'password-reset',
         details: { userId: user.id, username },
+        eventType: 'password-reset',
       });
 
       fastify.log.info({ userId: user.id, username }, 'Password reset completed');

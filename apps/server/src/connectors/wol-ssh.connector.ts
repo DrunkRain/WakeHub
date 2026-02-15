@@ -1,153 +1,126 @@
-import { Client } from 'ssh2';
+import { NodeSSH } from 'node-ssh';
 import wol from 'wake_on_lan';
+import type { Node, NodeStatus } from '@wakehub/shared';
 import type { PlatformConnector } from './connector.interface.js';
 import { PlatformError } from '../utils/platform-error.js';
+import net from 'node:net';
 
-const SSH_READY_TIMEOUT_MS = 10_000;
-const SSH_STATUS_TIMEOUT_MS = 5_000;
-const WOL_BROADCAST_ADDRESS = '255.255.255.255';
+const SSH_TIMEOUT_MS = 10_000;
+const STATUS_TIMEOUT_MS = 5_000;
+const PLATFORM = 'wol-ssh';
 
-interface WolSshConfig {
-  host: string;
-  macAddress?: string;
-  sshUser: string;
-  sshPassword: string;
+function sendWol(macAddress: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    wol.wake(macAddress, (error: Error | undefined) => {
+      if (error) {
+        reject(new PlatformError('WOL_SEND_FAILED', error.message, PLATFORM, { macAddress }));
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+function checkTcpPort(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.once('error', () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.connect(port, host);
+  });
 }
 
 export class WolSshConnector implements PlatformConnector {
-  constructor(private readonly config: WolSshConfig) {}
-
-  async testConnection(): Promise<{ success: boolean; message: string }> {
-    return new Promise((resolve) => {
-      const conn = new Client();
-      const timeout = setTimeout(() => {
-        conn.destroy();
-        resolve({ success: false, message: 'Connexion SSH timeout après 10s' });
-      }, SSH_READY_TIMEOUT_MS);
-
-      conn.on('ready', () => {
-        clearTimeout(timeout);
-        conn.end();
-        resolve({ success: true, message: 'Connexion SSH réussie' });
-      });
-
-      conn.on('error', (err: Error) => {
-        clearTimeout(timeout);
-        resolve({ success: false, message: `Connexion SSH échouée : ${err.message}` });
-      });
-
-      conn.connect({
-        host: this.config.host,
-        port: 22,
-        username: this.config.sshUser,
-        password: this.config.sshPassword,
-        readyTimeout: SSH_READY_TIMEOUT_MS,
-      });
-    });
-  }
-
-  async start(): Promise<void> {
-    if (!this.config.macAddress) {
-      throw new PlatformError('NO_START_CAPABILITY', 'Démarrage impossible — adresse MAC non configurée', 'wol-ssh');
-    }
-    return new Promise((resolve, reject) => {
-      wol.wake(
-        this.config.macAddress!,
-        { address: WOL_BROADCAST_ADDRESS },
-        (error: Error | undefined) => {
-          if (error) {
-            reject(
-              new PlatformError(
-                'WOL_SEND_FAILED',
-                `Échec envoi magic packet : ${error.message}`,
-                'wol-ssh',
-                { macAddress: this.config.macAddress },
-              ),
-            );
-          } else {
-            resolve();
-          }
-        },
+  async testConnection(node: Node): Promise<boolean> {
+    if (!node.ipAddress || !node.sshUser) {
+      throw new PlatformError(
+        'SSH_CONNECTION_FAILED',
+        'Missing IP address or SSH user',
+        PLATFORM,
+        { ipAddress: node.ipAddress, sshUser: node.sshUser },
       );
-    });
+    }
+
+    const ssh = new NodeSSH();
+    try {
+      await ssh.connect({
+        host: node.ipAddress,
+        username: node.sshUser,
+        password: node.sshCredentialsEncrypted ?? undefined,
+        readyTimeout: SSH_TIMEOUT_MS,
+      });
+      ssh.dispose();
+      return true;
+    } catch (error) {
+      throw new PlatformError(
+        'SSH_CONNECTION_FAILED',
+        (error as Error).message,
+        PLATFORM,
+        { host: node.ipAddress },
+      );
+    }
   }
 
-  async stop(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const conn = new Client();
+  async start(node: Node): Promise<void> {
+    if (!node.macAddress) {
+      throw new PlatformError(
+        'WOL_SEND_FAILED',
+        'Missing MAC address',
+        PLATFORM,
+        { nodeId: node.id },
+      );
+    }
 
-      conn.on('ready', () => {
-        conn.exec('sudo shutdown -h now', (err) => {
-          if (err) {
-            conn.destroy();
-            reject(
-              new PlatformError(
-                'SSH_COMMAND_FAILED',
-                `Échec commande shutdown : ${err.message}`,
-                'wol-ssh',
-                { host: this.config.host },
-              ),
-            );
-            return;
-          }
-          // Connection will close during shutdown — that's expected
-          conn.on('close', () => resolve());
-          conn.on('error', () => resolve());
-          // Resolve after a short delay if connection doesn't close
-          setTimeout(() => {
-            conn.destroy();
-            resolve();
-          }, 3000);
-        });
-      });
-
-      conn.on('error', (err: Error) => {
-        reject(
-          new PlatformError(
-            'SSH_CONNECTION_FAILED',
-            `Connexion SSH échouée pour arrêt : ${err.message}`,
-            'wol-ssh',
-            { host: this.config.host },
-          ),
-        );
-      });
-
-      conn.connect({
-        host: this.config.host,
-        port: 22,
-        username: this.config.sshUser,
-        password: this.config.sshPassword,
-        readyTimeout: SSH_READY_TIMEOUT_MS,
-      });
-    });
+    await sendWol(node.macAddress);
   }
 
-  async getStatus(): Promise<'online' | 'offline' | 'unknown' | 'error'> {
-    return new Promise((resolve) => {
-      const conn = new Client();
-      const timeout = setTimeout(() => {
-        conn.destroy();
-        resolve('offline');
-      }, SSH_STATUS_TIMEOUT_MS);
+  async stop(node: Node): Promise<void> {
+    if (!node.ipAddress || !node.sshUser) {
+      throw new PlatformError(
+        'SSH_CONNECTION_FAILED',
+        'Missing IP address or SSH user',
+        PLATFORM,
+        { ipAddress: node.ipAddress, sshUser: node.sshUser },
+      );
+    }
 
-      conn.on('ready', () => {
-        clearTimeout(timeout);
-        conn.end();
-        resolve('online');
+    const ssh = new NodeSSH();
+    try {
+      await ssh.connect({
+        host: node.ipAddress,
+        username: node.sshUser,
+        password: node.sshCredentialsEncrypted ?? undefined,
+        readyTimeout: SSH_TIMEOUT_MS,
       });
+      await ssh.execCommand('sudo shutdown -h now');
+      ssh.dispose();
+    } catch (error) {
+      throw new PlatformError(
+        'SSH_COMMAND_FAILED',
+        (error as Error).message,
+        PLATFORM,
+        { host: node.ipAddress, command: 'sudo shutdown -h now' },
+      );
+    }
+  }
 
-      conn.on('error', () => {
-        clearTimeout(timeout);
-        resolve('offline');
-      });
+  async getStatus(node: Node): Promise<NodeStatus> {
+    if (!node.ipAddress) {
+      return 'error';
+    }
 
-      conn.connect({
-        host: this.config.host,
-        port: 22,
-        username: this.config.sshUser,
-        password: this.config.sshPassword,
-        readyTimeout: SSH_STATUS_TIMEOUT_MS,
-      });
-    });
+    const reachable = await checkTcpPort(node.ipAddress, 22, STATUS_TIMEOUT_MS);
+    return reachable ? 'online' : 'offline';
   }
 }

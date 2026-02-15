@@ -11,13 +11,17 @@ import { config } from './config.js';
 // Establish database connection
 import { db } from './db/index.js';
 import authRoutes from './routes/auth.js';
-import servicesRoutes from './routes/services.routes.js';
+import nodesRoutes from './routes/nodes.routes.js';
 import dependenciesRoutes from './routes/dependencies.routes.js';
 import cascadesRoutes from './routes/cascades.routes.js';
-import statsRoutes from './routes/stats.routes.js';
-import { authMiddleware, cleanExpiredSessions } from './middleware/auth.middleware.js';
-import { SSEManager } from './sse/sse-manager.js';
 import eventsRoutes from './routes/events.routes.js';
+import statsRoutes from './routes/stats.routes.js';
+import inactivityRulesRoutes from './routes/inactivity-rules.routes.js';
+import logsRoutes from './routes/logs.routes.js';
+import { SSEManager } from './sse/sse-manager.js';
+import { authMiddleware, cleanExpiredSessions } from './middleware/auth.middleware.js';
+import { startInactivityMonitor, stopInactivityMonitor } from './services/inactivity-monitor.js';
+import { decrypt } from './utils/crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,38 +30,41 @@ const app = Fastify({ logger: true });
 // Inject db into app context
 app.decorate('db', db);
 
-// SSE Manager — singleton for real-time event broadcasting (Story 4.2)
+// Inject SSE manager into app context (Story 4.2)
 const sseManager = new SSEManager();
 app.decorate('sseManager', sseManager);
-app.addHook('onClose', () => {
-  sseManager.close();
-});
 
 await app.register(fastifyCookie);
 
-// CORS — allow credentials (cookies) from dev frontend
+// CORS — restrict to configured origin
 await app.register(fastifyCors, {
-  origin: true,
+  origin: config.corsOrigin,
   credentials: true,
 });
 
 // Register auth routes (public - Story 1.3 & 1.4)
 await app.register(authRoutes);
 
-// Register services routes (unified machines + resources — Story 7.2)
-await app.register(servicesRoutes);
+// Register nodes routes (protected - Story 2.1)
+await app.register(nodesRoutes);
 
-// Register dependencies routes (Story 3.1)
-await app.register(dependenciesRoutes);
+// Register dependencies routes (protected - Story 3.1)
+await app.register(dependenciesRoutes, { prefix: '/api/dependencies' });
 
-// Register cascades routes (Story 4.1)
-await app.register(cascadesRoutes);
+// Register cascades routes (protected - Story 4.1)
+await app.register(cascadesRoutes, { prefix: '/api/cascades' });
 
-// Register stats route (Story 4.3)
-await app.register(statsRoutes);
+// Register SSE events route (protected - Story 4.2)
+await app.register(eventsRoutes, { prefix: '/api' });
 
-// Register SSE events route (Story 4.2) — handles its own auth
-await app.register(eventsRoutes);
+// Register stats routes (protected - Story 4.3)
+await app.register(statsRoutes, { prefix: '/api/stats' });
+
+// Register inactivity rules routes (protected - Story 5.1)
+await app.register(inactivityRulesRoutes, { prefix: '/api/inactivity-rules' });
+
+// Register logs routes (protected - Story 6.1)
+await app.register(logsRoutes, { prefix: '/api/logs' });
 
 // Register auth middleware on all /api routes except auth routes (Story 1.4)
 app.addHook('preHandler', async (request, reply) => {
@@ -71,8 +78,7 @@ app.addHook('preHandler', async (request, reply) => {
     request.url.startsWith('/api/auth/reset-password') ||
     request.url.startsWith('/api/auth/logout') ||
     request.url.startsWith('/api/auth/me') ||
-    request.url === '/api/health' ||
-    request.url.startsWith('/api/events')
+    request.url === '/api/health'
   ) {
     return;
   }
@@ -116,6 +122,14 @@ if (config.nodeEnv === 'production') {
 
 // Clean expired sessions on startup
 await cleanExpiredSessions();
+
+// Start inactivity monitor (Story 5.1)
+startInactivityMonitor(db, sseManager, decrypt);
+
+// Stop inactivity monitor on server close
+app.addHook('onClose', async () => {
+  stopInactivityMonitor();
+});
 
 try {
   await app.listen({ port: config.port, host: '0.0.0.0' });

@@ -314,12 +314,15 @@ SPA React deployee via Docker en reseau local. Pages principales :
 
 ### Surveillance d'Inactivite & Arret Automatique
 
-- FR29: Le systeme surveille l'activite d'un service selon des criteres configurables (connexions reseau, requetes API, activite CPU/RAM, sessions utilisateur)
+- FR29: Le systeme surveille l'activite d'un service selon des criteres configurables (connexions reseau, requetes API, activite CPU/RAM, sessions utilisateur, accessibilite HTTP/HTTPS du service)
 - FR30: Le systeme declenche un arret automatique apres une periode d'inactivite configurable
 - FR31: L'administrateur peut definir un delai d'inactivite par defaut (30 minutes)
 - FR32: L'administrateur peut personnaliser le delai d'inactivite par service
 - FR33: Le systeme respecte les dependances partagees lors d'un arret automatique
 - FR34: Le systeme annule un arret automatique si un dependant actif est detecte
+- FR48: L'administrateur peut configurer les seuils CPU et RAM de detection d'inactivite par regle (defaut 50%)
+- FR49: Le systeme detecte l'inactivite reseau des conteneurs Docker via le delta de trafic (rx_bytes/tx_bytes) entre deux cycles de monitoring
+- FR50: Le systeme detecte l'inactivite reseau des VMs et LXCs via les metriques Proxmox rrddata (netin/netout) sans necessite de SSH
 
 ### Dashboard & Visualisation
 

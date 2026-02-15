@@ -1,387 +1,276 @@
 import { useState } from 'react';
+import { useNavigate, Link } from 'react-router';
 import {
   Drawer,
-  Modal,
-  Stack,
   Group,
-  Title,
-  Badge,
+  Stack,
+  Text,
   Button,
   ActionIcon,
   Tabs,
-  Table,
-  Text,
+  Modal,
+  Loader,
+  Anchor,
+  Badge,
 } from '@mantine/core';
-import { useMediaQuery } from '@mantine/hooks';
 import {
   IconX,
-  IconPlayerPlay,
+  IconPencil,
   IconExternalLink,
-  IconRefresh,
-  IconPlayerStop,
 } from '@tabler/icons-react';
-import type { Service, CascadeRecord } from '@wakehub/shared';
-import { useServices } from '../../api/services.api';
-import { useActiveCascades, useCascadeHistory } from '../../api/cascades.api';
-import { useDependencyChain } from '../../api/dependencies.api';
-import { deriveVisualStatus, statusConfig } from './service-tile';
-import type { VisualStatus } from './service-tile';
-import classes from './service-detail-panel.module.css';
+import { StatusBadge } from '../../components/shared/status-badge';
+import { NodeTypeIcon } from '../../components/shared/node-type-icon';
+import { CascadeProgress } from './cascade-progress';
+import { useCascadeForNode } from '../../stores/cascade.store';
+import { useDependencies } from '../../api/dependencies.api';
+import { useLogsQuery } from '../../api/logs.api';
+import type { NodeType, NodeStatus } from '@wakehub/shared';
 
-export interface ServiceDetailPanelProps {
-  serviceId: string | null;
-  onClose: () => void;
-  onStart: (serviceId: string) => void;
-  onStop: (serviceId: string) => void;
+export interface ServiceDetailNode {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  serviceUrl: string | null;
+  isPinned: boolean;
 }
 
-const nodeTypeLabel: Record<string, string> = {
-  service: 'Service',
-};
-
-const cascadeTypeLabel: Record<string, string> = {
-  start: 'Demarrage',
-  stop: 'Arret',
-};
-
-const cascadeStatusConfig: Record<string, { label: string; color: string }> = {
-  pending: { label: 'En attente', color: 'gray' },
-  in_progress: { label: 'En cours', color: 'yellow' },
-  completed: { label: 'Reussi', color: 'green' },
-  failed: { label: 'Echoue', color: 'red' },
-};
-
-function formatTimestamp(iso: string): string {
-  const date = new Date(iso);
-  return date.toLocaleDateString('fr-FR', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+export interface ServiceDetailPanelProps {
+  node: ServiceDetailNode | null;
+  opened: boolean;
+  onClose: () => void;
+  onStartCascade: (nodeId: string) => void;
+  onStopCascade: (nodeId: string) => void;
+  nodeTypeMap?: Record<string, string>;
 }
 
 export function ServiceDetailPanel({
-  serviceId,
+  node,
+  opened,
   onClose,
-  onStart,
-  onStop,
+  onStartCascade,
+  onStopCascade,
+  nodeTypeMap,
 }: ServiceDetailPanelProps) {
-  const [confirmStopOpen, setConfirmStopOpen] = useState(false);
-  const isMobile = useMediaQuery('(max-width: 768px)');
-  const { data: servicesData } = useServices();
-  const { data: cascadesData } = useActiveCascades();
-  const { data: chainData } = useDependencyChain('service', serviceId ?? '');
-  const { data: historyData } = useCascadeHistory(serviceId);
+  const navigate = useNavigate();
+  const [stopModalOpened, setStopModalOpened] = useState(false);
+  const cascadeState = useCascadeForNode(node?.id ?? '');
+  const { data: depsData, isLoading: depsLoading } = useDependencies(node?.id ?? '');
+  const { data: logsData, isLoading: logsLoading } = useLogsQuery(
+    node ? { nodeId: node.id, limit: 5 } : {},
+    { enabled: !!node },
+  );
 
-  const services = servicesData?.data ?? [];
-  const service = services.find((s) => s.id === serviceId) ?? null;
+  const upstream = depsData?.data.upstream ?? [];
+  const downstream = depsData?.data.downstream ?? [];
 
-  const activeCascades = cascadesData?.data ?? [];
-  const activeCascade = activeCascades.find(
-    (c) => c.serviceId === serviceId,
-  ) ?? null;
+  const currentNodeType =
+    cascadeState?.currentNodeId && nodeTypeMap
+      ? nodeTypeMap[cascadeState.currentNodeId]
+      : undefined;
 
-  const upstream = chainData?.data?.upstream ?? [];
-  const downstream = chainData?.data?.downstream ?? [];
-  const history = historyData?.data ?? [];
-
-  const handleConfirmStop = () => {
-    if (service) {
-      onStop(service.id);
-      setConfirmStopOpen(false);
-    }
+  const handleStop = () => {
+    if (!node) return;
+    setStopModalOpened(false);
+    onStopCascade(node.id);
   };
-
-  if (!service) {
-    return (
-      <Drawer
-        opened={!!serviceId}
-        onClose={onClose}
-        position="right"
-        size={isMobile ? '100%' : 380}
-        withCloseButton={false}
-        aria-label="Detail du service"
-      >
-        <Text c="dimmed" ta="center" py="xl">
-          Service introuvable.
-        </Text>
-      </Drawer>
-    );
-  }
-
-  const visualStatus = deriveVisualStatus(service, activeCascade);
-  const config = statusConfig[visualStatus];
 
   return (
     <>
-    <Drawer
-      opened={!!serviceId}
-      onClose={onClose}
-      position="right"
-      size={isMobile ? '100%' : 380}
-      withCloseButton={false}
-      aria-label={`Detail du service ${service.name}`}
-    >
-      <Stack h="100%" justify="space-between" className={classes.panelStack}>
-        {/* Header */}
-        <Group justify="space-between" align="flex-start">
-          <div>
-            <Title order={4}>{service.name}</Title>
-            <Badge color={config.color} variant="light" size="sm" mt={4}>
-              {config.label}
-            </Badge>
-          </div>
-          <ActionIcon
-            variant="subtle"
-            onClick={onClose}
-            aria-label="Fermer"
-          >
-            <IconX size={18} />
-          </ActionIcon>
-        </Group>
-
-        {/* Tabs */}
-        <Tabs defaultValue="dependencies" className={classes.tabs}>
-          <Tabs.List>
-            <Tabs.Tab value="dependencies">Dependances</Tabs.Tab>
-            <Tabs.Tab value="activity">Activite</Tabs.Tab>
-          </Tabs.List>
-
-          <Tabs.Panel value="dependencies" pt="md">
-            <DependenciesTab upstream={upstream} />
-          </Tabs.Panel>
-
-          <Tabs.Panel value="activity" pt="md">
-            <ActivityTab history={history} />
-          </Tabs.Panel>
-        </Tabs>
-
-        {/* Actions */}
-        <ActionsZone
-          service={service}
-          visualStatus={visualStatus}
-          onStart={onStart}
-          onStopClick={() => setConfirmStopOpen(true)}
-        />
-      </Stack>
-    </Drawer>
-
-    {service && (
-      <Modal
-        opened={confirmStopOpen}
-        onClose={() => setConfirmStopOpen(false)}
-        title={`Arrêter ${service.name} et ses dépendances ?`}
-        centered
+      <Drawer
+        opened={opened}
+        onClose={onClose}
+        position="right"
+        size={380}
+        title={null}
+        withCloseButton={false}
+        aria-label={node ? `Détail du service ${node.name}` : undefined}
       >
-        {downstream.length > 0 ? (
-          <Stack gap="xs">
-            <Text size="sm">Les services suivants seront aussi arrêtés :</Text>
-            {downstream.map((dep) => (
-              <Group key={dep.nodeId} justify="space-between" p="xs">
-                <Text size="sm">{dep.name}</Text>
-                <Badge
-                  color={dep.status === 'online' || dep.status === 'running' ? 'green' : 'gray'}
-                  variant="light"
-                  size="sm"
-                >
-                  {dep.status}
-                </Badge>
+        {node && (
+          <Stack gap="md" h="100%" style={{ display: 'flex', flexDirection: 'column' }}>
+            {/* Header */}
+            <Group justify="space-between">
+              <Group gap="sm">
+                <NodeTypeIcon type={node.type as NodeType} size={24} />
+                <Text fw={600} size="lg">{node.name}</Text>
+                <StatusBadge status={node.status as NodeStatus} size="sm" />
               </Group>
-            ))}
+              <Group gap={4}>
+                <ActionIcon
+                  variant="subtle"
+                  aria-label={`Éditer ${node.name}`}
+                  onClick={() => { onClose(); navigate(`/nodes/${node.id}`); }}
+                >
+                  <IconPencil size={18} />
+                </ActionIcon>
+                <ActionIcon
+                  variant="subtle"
+                  aria-label="Fermer"
+                  onClick={onClose}
+                >
+                  <IconX size={18} />
+                </ActionIcon>
+              </Group>
+            </Group>
+
+            {/* Tabs */}
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <Tabs defaultValue="dependencies">
+                <Tabs.List>
+                  <Tabs.Tab value="dependencies">Dépendances</Tabs.Tab>
+                  <Tabs.Tab value="logs">Logs</Tabs.Tab>
+                </Tabs.List>
+
+                <Tabs.Panel value="dependencies" pt="md">
+                  {depsLoading ? (
+                    <Loader size="sm" />
+                  ) : upstream.length === 0 ? (
+                    <Text size="sm" c="dimmed">Aucune dépendance</Text>
+                  ) : (
+                    <Stack gap="xs">
+                      {upstream.map((dep) => (
+                        <Group key={dep.linkId} gap="sm" p="xs" style={{ border: '1px solid var(--mantine-color-dark-4)', borderRadius: 'var(--mantine-radius-sm)' }}>
+                          <NodeTypeIcon type={dep.type as NodeType} size={18} />
+                          <div style={{ flex: 1 }}>
+                            <Text size="sm" fw={500}>{dep.name}</Text>
+                            <Text size="xs" c="dimmed">{dep.type}</Text>
+                          </div>
+                          <StatusBadge status={dep.status as NodeStatus} size="xs" />
+                        </Group>
+                      ))}
+                    </Stack>
+                  )}
+                </Tabs.Panel>
+
+                <Tabs.Panel value="logs" pt="md">
+                  {logsLoading ? (
+                    <Loader size="sm" />
+                  ) : (logsData?.data.logs.length ?? 0) === 0 ? (
+                    <Text size="sm" c="dimmed">Aucun log pour ce noeud</Text>
+                  ) : (
+                    <Stack gap="xs">
+                      {logsData!.data.logs.map((log) => (
+                        <Group key={log.id} gap="sm" p="xs" style={{ border: '1px solid var(--mantine-color-dark-4)', borderRadius: 'var(--mantine-radius-sm)' }}>
+                          <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+                            {new Date(log.timestamp).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'medium' })}
+                          </Text>
+                          <Badge size="xs" color={log.level === 'error' ? 'red' : log.level === 'warn' ? 'yellow' : 'blue'}>
+                            {log.level}
+                          </Badge>
+                          <Text size="sm" style={{ flex: 1 }} lineClamp={1}>{log.message}</Text>
+                        </Group>
+                      ))}
+                      <Anchor component={Link} to={`/logs?nodeId=${node.id}`} size="sm" ta="center">
+                        Voir tous les logs
+                      </Anchor>
+                    </Stack>
+                  )}
+                </Tabs.Panel>
+              </Tabs>
+            </div>
+
+            {/* CascadeProgress */}
+            {cascadeState && (
+              <CascadeProgress
+                step={cascadeState.step}
+                totalSteps={cascadeState.totalSteps}
+                currentNodeName={cascadeState.currentNodeName}
+                currentNodeType={currentNodeType}
+                status={cascadeState.status}
+                errorNodeName={cascadeState.errorNodeName}
+              />
+            )}
+
+            {/* Action zone — sticky bottom */}
+            <div style={{ borderTop: '1px solid var(--mantine-color-dark-4)', paddingTop: 'var(--mantine-spacing-md)' }}>
+              <Group grow>
+                {node.status === 'offline' && (
+                  <Button
+                    color="blue"
+                    aria-label={`Démarrer ${node.name}`}
+                    onClick={() => onStartCascade(node.id)}
+                  >
+                    Démarrer
+                  </Button>
+                )}
+                {node.status === 'online' && node.serviceUrl && (
+                  <Button
+                    color="blue"
+                    leftSection={<IconExternalLink size={16} />}
+                    aria-label={`Ouvrir ${node.name}`}
+                    onClick={() => window.open(node.serviceUrl!, '_blank', 'noopener,noreferrer')}
+                  >
+                    Ouvrir
+                  </Button>
+                )}
+                {node.status === 'online' && (
+                  <Button
+                    color="red"
+                    aria-label={`Arrêter ${node.name}`}
+                    onClick={() => setStopModalOpened(true)}
+                  >
+                    Arrêter
+                  </Button>
+                )}
+                {node.status === 'error' && (
+                  <Button
+                    color="orange"
+                    aria-label={`Réessayer ${node.name}`}
+                    onClick={() => onStartCascade(node.id)}
+                  >
+                    Réessayer
+                  </Button>
+                )}
+                {node.status === 'starting' && (
+                  <Button color="yellow" disabled loading>
+                    Démarrage…
+                  </Button>
+                )}
+                {node.status === 'stopping' && (
+                  <Button color="orange" disabled loading>
+                    Arrêt…
+                  </Button>
+                )}
+              </Group>
+            </div>
           </Stack>
-        ) : (
-          <Text size="sm" c="dimmed">Aucune dépendance ne sera affectée.</Text>
         )}
+      </Drawer>
 
-        <Group justify="flex-end" mt="lg">
-          <Button variant="default" onClick={() => setConfirmStopOpen(false)}>
-            Annuler
-          </Button>
-          <Button color="red" onClick={handleConfirmStop}>
-            Arrêter
-          </Button>
-        </Group>
+      {/* Stop Confirmation Modal */}
+      <Modal
+        opened={stopModalOpened}
+        onClose={() => setStopModalOpened(false)}
+        title={`Arrêter ${node?.name} ?`}
+      >
+        <Stack gap="md">
+          <Text size="sm">
+            Cette action va arrêter {node?.name} et ses dépendances en cascade :
+          </Text>
+          {downstream.length > 0 && (
+            <Stack gap="xs">
+              {downstream.map((dep) => (
+                <Group key={dep.linkId} gap="xs">
+                  <NodeTypeIcon type={dep.type as NodeType} size={16} />
+                  <Text size="sm">{dep.name}</Text>
+                  <StatusBadge status={dep.status as NodeStatus} size="xs" />
+                </Group>
+              ))}
+            </Stack>
+          )}
+          {downstream.length === 0 && (
+            <Text size="sm" c="dimmed">Aucune dépendance descendante ne sera affectée.</Text>
+          )}
+          <Group justify="flex-end" mt="md">
+            <Button variant="default" onClick={() => setStopModalOpened(false)}>
+              Annuler
+            </Button>
+            <Button color="red" onClick={handleStop}>
+              Confirmer l'arrêt
+            </Button>
+          </Group>
+        </Stack>
       </Modal>
-    )}
     </>
-  );
-}
-
-function DependenciesTab({
-  upstream,
-}: {
-  upstream: Array<{ nodeType: string; nodeId: string; name: string; status: string }>;
-}) {
-  if (upstream.length === 0) {
-    return (
-      <Text c="dimmed" size="sm" ta="center" py="lg">
-        Aucune dependance
-      </Text>
-    );
-  }
-
-  const statusColor: Record<string, string> = {
-    online: 'green',
-    running: 'green',
-    offline: 'gray',
-    stopped: 'gray',
-    paused: 'yellow',
-    unknown: 'gray',
-    error: 'red',
-  };
-
-  return (
-    <Stack gap="xs">
-      {upstream.map((node) => (
-        <Group key={node.nodeId} justify="space-between" p="xs" className={classes.depItem}>
-          <div>
-            <Text size="sm" fw={500}>
-              {node.name}
-            </Text>
-            <Text size="xs" c="dimmed">
-              {nodeTypeLabel[node.nodeType] ?? node.nodeType}
-            </Text>
-          </div>
-          <Badge
-            color={statusColor[node.status] ?? 'gray'}
-            variant="light"
-            size="sm"
-          >
-            {node.status}
-          </Badge>
-        </Group>
-      ))}
-    </Stack>
-  );
-}
-
-function ActivityTab({ history }: { history: CascadeRecord[] }) {
-  if (history.length === 0) {
-    return (
-      <Text c="dimmed" size="sm" ta="center" py="lg">
-        Aucune activite recente
-      </Text>
-    );
-  }
-
-  return (
-    <Table highlightOnHover>
-      <Table.Thead>
-        <Table.Tr>
-          <Table.Th>Horodatage</Table.Th>
-          <Table.Th>Type</Table.Th>
-          <Table.Th>Resultat</Table.Th>
-        </Table.Tr>
-      </Table.Thead>
-      <Table.Tbody>
-        {history.map((cascade) => {
-          const statusConf = cascadeStatusConfig[cascade.status] ?? {
-            label: cascade.status,
-            color: 'gray',
-          };
-          const errorSuffix =
-            cascade.status === 'failed' && cascade.errorCode
-              ? ` — ${cascade.errorCode}`
-              : '';
-
-          return (
-            <Table.Tr key={cascade.id}>
-              <Table.Td>
-                <Text size="sm">{formatTimestamp(cascade.startedAt)}</Text>
-              </Table.Td>
-              <Table.Td>
-                <Text size="sm">
-                  {cascadeTypeLabel[cascade.type] ?? cascade.type}
-                </Text>
-              </Table.Td>
-              <Table.Td>
-                <Badge color={statusConf.color} variant="light" size="sm">
-                  {statusConf.label}{errorSuffix}
-                </Badge>
-              </Table.Td>
-            </Table.Tr>
-          );
-        })}
-      </Table.Tbody>
-    </Table>
-  );
-}
-
-function ActionsZone({
-  service,
-  visualStatus,
-  onStart,
-  onStopClick,
-}: {
-  service: Service;
-  visualStatus: VisualStatus;
-  onStart: (serviceId: string) => void;
-  onStopClick: () => void;
-}) {
-  const isLoading = visualStatus === 'starting' || visualStatus === 'stopping';
-
-  return (
-    <Group className={classes.actions} gap="sm">
-      {visualStatus === 'stopped' && (
-        <Button
-          color="blue"
-          leftSection={<IconPlayerPlay size={16} />}
-          onClick={() => onStart(service.id)}
-          aria-label={`Demarrer ${service.name}`}
-        >
-          Demarrer
-        </Button>
-      )}
-
-      {visualStatus === 'running' && service.serviceUrl && (
-        <Button
-          color="blue"
-          variant="light"
-          leftSection={<IconExternalLink size={16} />}
-          component="a"
-          href={service.serviceUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={`Ouvrir ${service.name}`}
-        >
-          Ouvrir
-        </Button>
-      )}
-
-      {visualStatus === 'running' && (
-        <Button
-          color="orange"
-          variant="light"
-          leftSection={<IconPlayerStop size={16} />}
-          onClick={onStopClick}
-          aria-label={`Arreter ${service.name}`}
-        >
-          Arreter
-        </Button>
-      )}
-
-      {visualStatus === 'error' && (
-        <Button
-          color="orange"
-          leftSection={<IconRefresh size={16} />}
-          onClick={() => onStart(service.id)}
-          aria-label={`Reessayer ${service.name}`}
-        >
-          Reessayer
-        </Button>
-      )}
-
-      {isLoading && (
-        <Button
-          color={visualStatus === 'starting' ? 'yellow' : 'orange'}
-          variant="light"
-          loading
-          disabled
-        >
-          {visualStatus === 'starting' ? 'En demarrage...' : 'En arret...'}
-        </Button>
-      )}
-    </Group>
   );
 }

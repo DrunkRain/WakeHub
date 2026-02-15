@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { unlinkSync } from 'node:fs';
+import argon2 from 'argon2';
 import * as schema from '../db/schema.js';
 import dependenciesRoutes from './dependencies.routes.js';
 
@@ -12,26 +13,33 @@ const TEST_DB_PATH = './test-dependencies-db.sqlite';
 
 describe('Dependencies Routes', () => {
   let app: FastifyInstance;
+  let db: ReturnType<typeof drizzle>;
   let sqlite: Database.Database;
-
-  const serviceA = 'service-aaa';
-  const serviceB = 'service-bbb';
-  const serviceC = 'service-ccc';
-  const serviceD = 'service-ddd';
-  const serviceE = 'service-eee';
 
   beforeAll(async () => {
     sqlite = new Database(TEST_DB_PATH);
     sqlite.pragma('journal_mode = WAL');
     sqlite.pragma('foreign_keys = ON');
-    const db = drizzle(sqlite, { schema });
+    db = drizzle(sqlite, { schema });
     migrate(db, { migrationsFolder: './drizzle' });
 
     app = Fastify();
     await app.register(fastifyCookie);
-    app.decorate('db', db as unknown);
-    await app.register(dependenciesRoutes);
+    app.decorate('db', db as any);
+
+    // Simulate auth middleware — inject userId on all requests
+    app.addHook('preHandler', async (request) => {
+      request.userId = 'test-user-id';
+    });
+
+    await app.register(dependenciesRoutes, { prefix: '/api/dependencies' });
     await app.ready();
+
+    // Create a test user and session for auth
+    const passwordHash = await argon2.hash('TestPass123');
+    sqlite.prepare(
+      `INSERT INTO users (id, username, password_hash, security_question, security_answer_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('test-user-id', 'testuser', passwordHash, 'Question?', 'answer-hash', Date.now(), Date.now());
   });
 
   afterAll(async () => {
@@ -46,360 +54,278 @@ describe('Dependencies Routes', () => {
     }
   });
 
-  beforeEach(() => {
-    sqlite.exec('DELETE FROM dependency_links');
-    sqlite.exec('DELETE FROM operation_logs');
-    sqlite.exec('DELETE FROM services');
+  // Helper: insert a node and return its id
+  function insertNode(name: string, type: 'physical' | 'vm' | 'lxc' | 'container' = 'physical'): string {
+    const id = crypto.randomUUID();
+    sqlite.prepare(
+      `INSERT INTO nodes (id, name, type, status, is_pinned, confirm_before_shutdown, discovered, configured, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, name, type, 'online', 0, 1, 0, 1, Date.now(), Date.now());
+    return id;
+  }
 
-    const now = Math.floor(Date.now() / 1000);
-    sqlite.exec(`
-      INSERT INTO services (id, name, type, ip_address, status, created_at, updated_at) VALUES
-        ('${serviceA}', 'NAS', 'physical', '192.168.1.10', 'online', ${now}, ${now}),
-        ('${serviceB}', 'Proxmox', 'proxmox', '192.168.1.20', 'online', ${now}, ${now})
-    `);
-    sqlite.exec(`
-      INSERT INTO services (id, name, type, status, platform_ref, parent_id, created_at, updated_at) VALUES
-        ('${serviceC}', 'VM-Media', 'vm', 'running', '{"node":"pve","vmid":100}', '${serviceB}', ${now}, ${now}),
-        ('${serviceD}', 'VM-Backup', 'vm', 'stopped', '{"node":"pve","vmid":101}', '${serviceB}', ${now}, ${now}),
-        ('${serviceE}', 'Jellyfin', 'container', 'running', '{"containerId":"abc","image":"jf"}', '${serviceB}', ${now}, ${now})
-    `);
+  // Helper: insert a dependency link and return its id
+  function insertLink(fromId: string, toId: string): string {
+    const id = crypto.randomUUID();
+    sqlite.prepare(
+      `INSERT INTO dependency_links (id, from_node_id, to_node_id, created_at) VALUES (?, ?, ?, ?)`,
+    ).run(id, fromId, toId, Date.now());
+    return id;
+  }
+
+  beforeEach(() => {
+    sqlite.prepare('DELETE FROM dependency_links').run();
+    sqlite.prepare('DELETE FROM nodes').run();
+    sqlite.prepare('DELETE FROM operation_logs').run();
   });
 
   describe('POST /api/dependencies', () => {
-    it('should create a valid dependency link -> 200', async () => {
-      const res = await app.inject({
+    it('should create a dependency link', async () => {
+      const nodeA = insertNode('Jellyfin');
+      const nodeB = insertNode('NAS');
+
+      const response = await app.inject({
         method: 'POST',
         url: '/api/dependencies',
-        payload: {
-          parentType: 'service',
-          parentId: serviceA,
-          childType: 'service',
-          childId: serviceC,
-        },
+        payload: { fromNodeId: nodeA, toNodeId: nodeB },
       });
 
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      expect(body.data).toMatchObject({
-        parentType: 'service',
-        parentId: serviceA,
-        childType: 'service',
-        childId: serviceC,
-        isShared: false,
-      });
-      expect(body.data.id).toBeDefined();
-      expect(body.data.createdAt).toBeDefined();
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.data.dependency).toBeDefined();
+      expect(body.data.dependency.fromNodeId).toBe(nodeA);
+      expect(body.data.dependency.toNodeId).toBe(nodeB);
+      expect(body.data.dependency.id).toBeDefined();
     });
 
-    it('should refuse a cycle -> 409', async () => {
-      await app.inject({
+    it('should reject self-link (400)', async () => {
+      const nodeA = insertNode('Node A');
+
+      const response = await app.inject({
         method: 'POST',
         url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
+        payload: { fromNodeId: nodeA, toNodeId: nodeA },
       });
 
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceC, childType: 'service', childId: serviceA },
-      });
-
-      expect(res.statusCode).toBe(409);
-      expect(res.json().error.code).toBe('CYCLE_DETECTED');
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe('DEPENDENCY_SELF_LINK');
     });
 
-    it('should refuse a duplicate -> 409', async () => {
-      await app.inject({
+    it('should reject duplicate link (400)', async () => {
+      const nodeA = insertNode('Node A');
+      const nodeB = insertNode('Node B');
+      insertLink(nodeA, nodeB);
+
+      const response = await app.inject({
         method: 'POST',
         url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
+        payload: { fromNodeId: nodeA, toNodeId: nodeB },
       });
 
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
-      });
-
-      expect(res.statusCode).toBe(409);
-      expect(res.json().error.code).toBe('DUPLICATE_LINK');
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe('DEPENDENCY_DUPLICATE');
     });
 
-    it('should refuse a non-existent node -> 404', async () => {
-      const res = await app.inject({
+    it('should reject cycle (400)', async () => {
+      const nodeA = insertNode('Node A');
+      const nodeB = insertNode('Node B');
+      insertLink(nodeA, nodeB); // A depends on B
+
+      const response = await app.inject({
         method: 'POST',
         url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: 'non-existent', childType: 'service', childId: serviceC },
+        payload: { fromNodeId: nodeB, toNodeId: nodeA }, // B depends on A → cycle
       });
 
-      expect(res.statusCode).toBe(404);
-      expect(res.json().error.code).toBe('NODE_NOT_FOUND');
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe('DEPENDENCY_CYCLE_DETECTED');
     });
 
-    it('should refuse a self-reference -> 400', async () => {
-      const res = await app.inject({
+    it('should return 404 when fromNodeId does not exist', async () => {
+      const nodeB = insertNode('Node B');
+
+      const response = await app.inject({
         method: 'POST',
         url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceA },
+        payload: { fromNodeId: 'nonexistent-id', toNodeId: nodeB },
       });
 
-      expect(res.statusCode).toBe(400);
-      expect(res.json().error.code).toBe('SELF_REFERENCE');
+      expect(response.statusCode).toBe(404);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe('NODE_NOT_FOUND');
     });
 
-    it('should log the operation', async () => {
-      await app.inject({
+    it('should return 404 when toNodeId does not exist', async () => {
+      const nodeA = insertNode('Node A');
+
+      const response = await app.inject({
         method: 'POST',
         url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
+        payload: { fromNodeId: nodeA, toNodeId: 'nonexistent-id' },
       });
 
-      const logs = sqlite.prepare(
-        "SELECT * FROM operation_logs WHERE source = 'dependencies' AND reason = 'dependency-created'"
-      ).all() as Array<{ message: string }>;
-      expect(logs.length).toBe(1);
+      expect(response.statusCode).toBe(404);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe('NODE_NOT_FOUND');
     });
   });
 
   describe('GET /api/dependencies', () => {
-    it('should return links filtered by nodeType and nodeId', async () => {
-      await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
-      });
-      await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceD },
-      });
+    it('should return upstream and downstream dependencies with node info', async () => {
+      const nas = insertNode('NAS', 'physical');
+      const jellyfin = insertNode('Jellyfin', 'container');
+      const plex = insertNode('Plex', 'container');
+      const storage = insertNode('Storage', 'vm');
 
-      const res = await app.inject({
+      insertLink(jellyfin, nas); // Jellyfin depends on NAS
+      insertLink(plex, nas);     // Plex depends on NAS
+      insertLink(nas, storage);   // NAS depends on Storage
+
+      const response = await app.inject({
         method: 'GET',
-        url: `/api/dependencies?nodeType=service&nodeId=${serviceA}`,
+        url: `/api/dependencies?nodeId=${nas}`,
       });
 
-      expect(res.statusCode).toBe(200);
-      expect(res.json().data).toHaveLength(2);
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+
+      // NAS depends on Storage (upstream)
+      expect(body.data.upstream).toHaveLength(1);
+      expect(body.data.upstream[0].name).toBe('Storage');
+      expect(body.data.upstream[0].type).toBe('vm');
+      expect(body.data.upstream[0].status).toBe('online');
+      expect(body.data.upstream[0].linkId).toBeDefined();
+      expect(body.data.upstream[0].nodeId).toBe(storage);
+
+      // Jellyfin + Plex depend on NAS (downstream)
+      expect(body.data.downstream).toHaveLength(2);
+      const downstreamNames = body.data.downstream.map((d: any) => d.name);
+      expect(downstreamNames).toContain('Jellyfin');
+      expect(downstreamNames).toContain('Plex');
     });
 
-    it('should return all links when no filter', async () => {
-      await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
-      });
+    it('should return empty arrays when node has no dependencies', async () => {
+      const nodeA = insertNode('Isolated Node');
 
-      const res = await app.inject({
+      const response = await app.inject({
         method: 'GET',
-        url: '/api/dependencies',
+        url: `/api/dependencies?nodeId=${nodeA}`,
       });
 
-      expect(res.statusCode).toBe(200);
-      expect(res.json().data).toHaveLength(1);
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.data.upstream).toEqual([]);
+      expect(body.data.downstream).toEqual([]);
     });
-  });
 
-  describe('GET /api/dependencies/chain', () => {
-    it('should return the complete upstream/downstream chain', async () => {
-      // serviceA -> serviceC -> serviceE
-      await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
-      });
-      await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceC, childType: 'service', childId: serviceE },
-      });
-
-      const res = await app.inject({
+    it('should return 404 for nonexistent node', async () => {
+      const response = await app.inject({
         method: 'GET',
-        url: `/api/dependencies/chain?nodeType=service&nodeId=${serviceC}`,
+        url: '/api/dependencies?nodeId=nonexistent-id',
       });
 
-      expect(res.statusCode).toBe(200);
-      const { upstream, downstream } = res.json().data;
-      expect(upstream).toHaveLength(1);
-      expect(upstream[0]).toMatchObject({ nodeType: 'service', nodeId: serviceA, name: 'NAS' });
-      expect(downstream).toHaveLength(1);
-      expect(downstream[0]).toMatchObject({ nodeType: 'service', nodeId: serviceE, name: 'Jellyfin' });
-    });
-  });
-
-  describe('DELETE /api/dependencies/:id', () => {
-    it('should delete an existing link -> 200', async () => {
-      const createRes = await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
-      });
-      const linkId = createRes.json().data.id;
-
-      const res = await app.inject({ method: 'DELETE', url: `/api/dependencies/${linkId}` });
-
-      expect(res.statusCode).toBe(200);
-      expect(res.json().data.success).toBe(true);
-
-      const getRes = await app.inject({ method: 'GET', url: '/api/dependencies' });
-      expect(getRes.json().data).toHaveLength(0);
-    });
-
-    it('should return 404 for non-existent link', async () => {
-      const res = await app.inject({ method: 'DELETE', url: '/api/dependencies/non-existent-id' });
-
-      expect(res.statusCode).toBe(404);
-      expect(res.json().error.code).toBe('NOT_FOUND');
-    });
-
-    it('should return 403 for structural links', async () => {
-      const now = Date.now();
-      sqlite.exec(`
-        INSERT INTO dependency_links (id, parent_type, parent_id, child_type, child_id, is_shared, is_structural, created_at)
-        VALUES ('structural-link', 'service', '${serviceB}', 'service', '${serviceC}', 0, 1, ${now})
-      `);
-
-      const res = await app.inject({ method: 'DELETE', url: '/api/dependencies/structural-link' });
-
-      expect(res.statusCode).toBe(403);
-      expect(res.json().error.code).toBe('STRUCTURAL_LINK');
-    });
-
-    it('should log the deletion', async () => {
-      const createRes = await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
-      });
-      const linkId = createRes.json().data.id;
-
-      await app.inject({ method: 'DELETE', url: `/api/dependencies/${linkId}` });
-
-      const logs = sqlite.prepare(
-        "SELECT * FROM operation_logs WHERE source = 'dependencies' AND reason = 'dependency-deleted'"
-      ).all() as Array<{ message: string }>;
-      expect(logs.length).toBe(1);
-    });
-  });
-
-  describe('PATCH /api/dependencies/:id', () => {
-    it('should update isShared -> 200', async () => {
-      const createRes = await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
-      });
-      const linkId = createRes.json().data.id;
-
-      const res = await app.inject({
-        method: 'PATCH',
-        url: `/api/dependencies/${linkId}`,
-        payload: { isShared: true },
-      });
-
-      expect(res.statusCode).toBe(200);
-      expect(res.json().data.isShared).toBe(true);
-    });
-
-    it('should return 404 for non-existent link', async () => {
-      const res = await app.inject({
-        method: 'PATCH',
-        url: '/api/dependencies/non-existent-id',
-        payload: { isShared: true },
-      });
-
-      expect(res.statusCode).toBe(404);
-      expect(res.json().error.code).toBe('NOT_FOUND');
-    });
-
-    it('should log the update', async () => {
-      const createRes = await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
-      });
-      const linkId = createRes.json().data.id;
-
-      await app.inject({
-        method: 'PATCH',
-        url: `/api/dependencies/${linkId}`,
-        payload: { isShared: true },
-      });
-
-      const logs = sqlite.prepare(
-        "SELECT * FROM operation_logs WHERE source = 'dependencies' AND reason = 'dependency-updated'"
-      ).all() as Array<{ message: string }>;
-      expect(logs.length).toBe(1);
+      expect(response.statusCode).toBe(404);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe('NODE_NOT_FOUND');
     });
   });
 
   describe('GET /api/dependencies/graph', () => {
-    it('should return nodes and edges for the full graph -> 200', async () => {
-      // serviceA -> serviceC -> serviceE
-      await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
-      });
-      await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceC, childType: 'service', childId: serviceE },
+    it('should return an empty graph when no links exist', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/dependencies/graph',
       });
 
-      const res = await app.inject({ method: 'GET', url: '/api/dependencies/graph' });
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.data.nodes).toEqual([]);
+      expect(body.data.links).toEqual([]);
+    });
 
-      expect(res.statusCode).toBe(200);
-      const { nodes, edges } = res.json().data;
-      expect(nodes).toHaveLength(3);
-      expect(edges).toHaveLength(2);
+    it('should return graph with nodes and links', async () => {
+      const nas = insertNode('NAS', 'physical');
+      const jellyfin = insertNode('Jellyfin', 'container');
+      const plex = insertNode('Plex', 'container');
+      insertLink(jellyfin, nas);
+      insertLink(plex, nas);
 
-      const nasNode = nodes.find((n: { id: string }) => n.id === `service:${serviceA}`);
-      expect(nasNode).toMatchObject({
-        name: 'NAS',
-        nodeType: 'service',
-        subType: 'physical',
-        status: 'online',
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/dependencies/graph',
       });
 
-      const vmNode = nodes.find((n: { id: string }) => n.id === `service:${serviceC}`);
-      expect(vmNode).toMatchObject({
-        name: 'VM-Media',
-        nodeType: 'service',
-        subType: 'vm',
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.data.nodes).toHaveLength(3);
+      expect(body.data.links).toHaveLength(2);
+
+      const nodeNames = body.data.nodes.map((n: any) => n.name);
+      expect(nodeNames).toContain('NAS');
+      expect(nodeNames).toContain('Jellyfin');
+      expect(nodeNames).toContain('Plex');
+
+      body.data.nodes.forEach((n: any) => {
+        expect(n.id).toBeDefined();
+        expect(n.name).toBeDefined();
+        expect(n.type).toBeDefined();
+        expect(n.status).toBeDefined();
+      });
+
+      body.data.links.forEach((l: any) => {
+        expect(l.id).toBeDefined();
+        expect(l.fromNodeId).toBeDefined();
+        expect(l.toNodeId).toBeDefined();
       });
     });
 
-    it('should return empty graph when no dependencies -> 200', async () => {
-      const res = await app.inject({ method: 'GET', url: '/api/dependencies/graph' });
+    it('should return 200 for unauthenticated request (auth handled by middleware)', async () => {
+      // Note: auth is handled at the middleware level, not at route level
+      // This test verifies the route itself works; auth would be blocked by middleware in production
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/dependencies/graph',
+      });
 
-      expect(res.statusCode).toBe(200);
-      expect(res.json().data.nodes).toHaveLength(0);
-      expect(res.json().data.edges).toHaveLength(0);
+      expect(response.statusCode).toBe(200);
+    });
+  });
+
+  describe('DELETE /api/dependencies/:id', () => {
+    it('should delete a dependency link', async () => {
+      const nodeA = insertNode('Node A');
+      const nodeB = insertNode('Node B');
+      const linkId = insertLink(nodeA, nodeB);
+
+      const response = await app.inject({
+        method: 'DELETE',
+        url: `/api/dependencies/${linkId}`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.data.success).toBe(true);
+
+      // Verify link is gone
+      const checkResponse = await app.inject({
+        method: 'GET',
+        url: `/api/dependencies?nodeId=${nodeA}`,
+      });
+      const checkBody = JSON.parse(checkResponse.body);
+      expect(checkBody.data.upstream).toEqual([]);
     });
 
-    it('should correctly mark shared nodes', async () => {
-      // serviceA -> serviceC AND serviceA -> serviceD (serviceA has 2 children = shared)
-      await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceC },
-      });
-      await app.inject({
-        method: 'POST',
-        url: '/api/dependencies',
-        payload: { parentType: 'service', parentId: serviceA, childType: 'service', childId: serviceD },
+    it('should return 404 for nonexistent dependency', async () => {
+      const response = await app.inject({
+        method: 'DELETE',
+        url: '/api/dependencies/nonexistent-id',
       });
 
-      const res = await app.inject({ method: 'GET', url: '/api/dependencies/graph' });
-
-      const { nodes } = res.json().data;
-      const nasNode = nodes.find((n: { id: string }) => n.id === `service:${serviceA}`);
-      expect(nasNode.isShared).toBe(true);
-
-      const vmNode = nodes.find((n: { id: string }) => n.id === `service:${serviceC}`);
-      expect(vmNode.isShared).toBe(false);
+      expect(response.statusCode).toBe(404);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe('DEPENDENCY_NOT_FOUND');
     });
   });
 });

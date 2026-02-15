@@ -12,6 +12,7 @@ services:
       - DATABASE_PATH=/data/wakehub.sqlite
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - SESSION_SECRET=${SESSION_SECRET}
+      - COOKIE_SECURE=false
     volumes:
       - wakehub-data:/data
     restart: unless-stopped

@@ -1,334 +1,464 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
+
+const { mockPing, mockGet, mockPost } = vi.hoisted(() => ({
+  mockPing: vi.fn(),
+  mockGet: vi.fn(),
+  mockPost: vi.fn(),
+}));
+
+vi.mock('./docker-client.js', () => ({
+  DockerClient: class {
+    ping = mockPing;
+    get = mockGet;
+    post = mockPost;
+  },
+}));
+
 import { DockerConnector } from './docker.connector.js';
 import { PlatformError } from '../utils/platform-error.js';
+import type { Node } from '@wakehub/shared';
 
-const mockFetch = vi.fn();
-vi.stubGlobal('fetch', mockFetch);
+function makeParentNode(overrides?: Partial<Node>): Node {
+  return {
+    id: 'parent-1',
+    name: 'Docker Host',
+    type: 'physical',
+    status: 'online',
+    ipAddress: '10.0.0.1',
+    macAddress: null,
+    sshUser: null,
+    sshCredentialsEncrypted: null,
+    parentId: null,
+    capabilities: {
+      docker_api: { host: '10.0.0.1', port: 2375 },
+    },
+    platformRef: null,
+    serviceUrl: null,
+    isPinned: false,
+    confirmBeforeShutdown: false,
+    discovered: false,
+    configured: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
+function makeContainerNode(overrides?: Partial<Node>): Node {
+  return {
+    id: 'container-1',
+    name: 'my-nginx',
+    type: 'container',
+    status: 'online',
+    ipAddress: null,
+    macAddress: null,
+    sshUser: null,
+    sshCredentialsEncrypted: null,
+    parentId: 'parent-1',
+    capabilities: null,
+    platformRef: { platform: 'docker', platformId: 'abc123def456' },
+    serviceUrl: null,
+    isPinned: false,
+    confirmBeforeShutdown: false,
+    discovered: true,
+    configured: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
 
 describe('DockerConnector', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  describe('testConnection', () => {
-    it('returns success when ping and version succeed', async () => {
-      const connector = new DockerConnector({ apiUrl: 'http://192.168.1.10:2375' });
-
-      // Mock /_ping
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: async () => 'OK',
-      });
-      // Mock /version
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ Version: '27.5.1', ApiVersion: '1.47' }),
-      });
-
-      const result = await connector.testConnection();
-      expect(result.success).toBe(true);
-      expect(result.message).toContain('v27.5.1');
-      expect(result.message).toContain('API v1.47');
-    });
-
-    it('returns failure when host is unreachable', async () => {
-      const connector = new DockerConnector({ apiUrl: 'http://192.168.1.99:2375' });
-
-      mockFetch.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
-
-      const result = await connector.testConnection();
-      expect(result.success).toBe(false);
-      expect(result.message).toContain('ECONNREFUSED');
-    });
-
-    it('returns failure when ping returns non-200', async () => {
-      const connector = new DockerConnector({ apiUrl: 'http://192.168.1.10:2375' });
-
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 503,
-      });
-
-      const result = await connector.testConnection();
-      expect(result.success).toBe(false);
-      expect(result.message).toContain('503');
+  describe('constructor', () => {
+    it('should throw PlatformError if parent has no docker_api capability', () => {
+      const parent = makeParentNode({ capabilities: null });
+      expect(() => new DockerConnector(parent)).toThrow(PlatformError);
     });
   });
 
-  describe('listResources', () => {
-    it('returns containers with mapped status and cleaned names', async () => {
-      const connector = new DockerConnector({ apiUrl: 'http://192.168.1.10:2375' });
+  describe('testConnection', () => {
+    it('should return true when ping succeeds', async () => {
+      mockPing.mockResolvedValueOnce(true);
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => [
-          {
-            Id: 'abc123def456',
-            Names: ['/jellyfin'],
-            Image: 'jellyfin/jellyfin:latest',
-            State: 'running',
-            Status: 'Up 5 minutes',
-          },
-          {
-            Id: 'xyz789ghi012',
-            Names: ['/nextcloud'],
-            Image: 'nextcloud:latest',
-            State: 'exited',
-            Status: 'Exited (0) 3 hours ago',
-          },
-          {
-            Id: 'pqr345stu678',
-            Names: ['/postgres'],
-            Image: 'postgres:16',
-            State: 'paused',
-            Status: 'Paused',
-          },
-        ],
-      });
-
-      const result = await connector.listResources();
-      expect(result).toHaveLength(3);
-
-      expect(result[0]).toEqual({
-        name: 'jellyfin',
-        type: 'container',
-        platformRef: { containerId: 'abc123def456', image: 'jellyfin/jellyfin:latest' },
-        status: 'running',
-      });
-
-      expect(result[1]).toEqual({
-        name: 'nextcloud',
-        type: 'container',
-        platformRef: { containerId: 'xyz789ghi012', image: 'nextcloud:latest' },
-        status: 'stopped',
-      });
-
-      expect(result[2]).toEqual({
-        name: 'postgres',
-        type: 'container',
-        platformRef: { containerId: 'pqr345stu678', image: 'postgres:16' },
-        status: 'paused',
-      });
+      const connector = new DockerConnector(makeParentNode());
+      const result = await connector.testConnection(makeContainerNode());
+      expect(result).toBe(true);
+      expect(mockPing).toHaveBeenCalled();
     });
 
-    it('maps all Docker states correctly', async () => {
-      const connector = new DockerConnector({ apiUrl: 'http://192.168.1.10:2375' });
+    it('should throw PlatformError on connection failure', async () => {
+      mockPing.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => [
-          { Id: 'a', Names: ['/a'], Image: 'img', State: 'running', Status: '' },
-          { Id: 'b', Names: ['/b'], Image: 'img', State: 'exited', Status: '' },
-          { Id: 'c', Names: ['/c'], Image: 'img', State: 'created', Status: '' },
-          { Id: 'd', Names: ['/d'], Image: 'img', State: 'paused', Status: '' },
-          { Id: 'e', Names: ['/e'], Image: 'img', State: 'restarting', Status: '' },
-          { Id: 'f', Names: ['/f'], Image: 'img', State: 'removing', Status: '' },
-          { Id: 'g', Names: ['/g'], Image: 'img', State: 'dead', Status: '' },
-          { Id: 'h', Names: ['/h'], Image: 'img', State: 'something-else', Status: '' },
-        ],
-      });
-
-      const result = await connector.listResources();
-      expect(result.map((r) => r.status)).toEqual([
-        'running',   // running
-        'stopped',   // exited
-        'stopped',   // created
-        'paused',    // paused
-        'running',   // restarting
-        'stopped',   // removing
-        'error',     // dead
-        'unknown',   // unknown state
-      ]);
+      const connector = new DockerConnector(makeParentNode());
+      await expect(connector.testConnection(makeContainerNode())).rejects.toThrow(PlatformError);
     });
 
-    it('uses truncated ID when container has no name', async () => {
-      const connector = new DockerConnector({ apiUrl: 'http://192.168.1.10:2375' });
+    it('should include DOCKER_UNREACHABLE code on network error', async () => {
+      mockPing.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => [
-          { Id: 'abcdef123456789', Names: [], Image: 'img', State: 'running', Status: '' },
-        ],
-      });
-
-      const result = await connector.listResources();
-      expect(result[0].name).toBe('abcdef123456');
-    });
-
-    it('throws PlatformError on network failure', async () => {
-      const connector = new DockerConnector({ apiUrl: 'http://192.168.1.99:2375' });
-
-      mockFetch.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
-
+      const connector = new DockerConnector(makeParentNode());
       try {
-        await connector.listResources();
-        expect.fail('should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(PlatformError);
-        expect((err as PlatformError).platform).toBe('docker');
+        await connector.testConnection(makeContainerNode());
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError);
+        expect((error as PlatformError).code).toBe('DOCKER_UNREACHABLE');
+        expect((error as PlatformError).platform).toBe('docker');
       }
     });
   });
 
   describe('start', () => {
-    it('calls POST /containers/{id}/start', async () => {
-      const connector = new DockerConnector({
-        apiUrl: 'http://192.168.1.10:2375',
-        resourceRef: { containerId: 'abc123' },
-      });
+    it('should POST to start container endpoint', async () => {
+      mockPost.mockResolvedValueOnce(undefined);
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 204,
-      });
+      const connector = new DockerConnector(makeParentNode());
+      await connector.start(makeContainerNode());
 
-      await connector.start();
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://192.168.1.10:2375/containers/abc123/start',
-        { method: 'POST' },
-      );
+      expect(mockPost).toHaveBeenCalledWith('/containers/abc123def456/start');
     });
 
-    it('does not throw on 304 (already started)', async () => {
-      const connector = new DockerConnector({
-        apiUrl: 'http://192.168.1.10:2375',
-        resourceRef: { containerId: 'abc123' },
-      });
+    it('should throw PlatformError if platformRef is missing', async () => {
+      const connector = new DockerConnector(makeParentNode());
+      const node = makeContainerNode({ platformRef: null });
 
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 304,
-      });
-
-      await expect(connector.start()).resolves.toBeUndefined();
+      await expect(connector.start(node)).rejects.toThrow(PlatformError);
     });
 
-    it('throws PlatformError on 404 (container not found)', async () => {
-      const connector = new DockerConnector({
-        apiUrl: 'http://192.168.1.10:2375',
-        resourceRef: { containerId: 'nonexistent' },
-      });
+    it('should throw DOCKER_START_FAILED on error', async () => {
+      mockPost.mockRejectedValueOnce(new Error('Docker POST failed (500)'));
 
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 404,
-        json: async () => ({ message: 'No such container: nonexistent' }),
-      });
-
-      await expect(connector.start()).rejects.toThrow(PlatformError);
-    });
-
-    it('throws PlatformError when no resourceRef', async () => {
-      const connector = new DockerConnector({
-        apiUrl: 'http://192.168.1.10:2375',
-      });
-
+      const connector = new DockerConnector(makeParentNode());
       try {
-        await connector.start();
-        expect.fail('should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(PlatformError);
-        expect((err as PlatformError).code).toBe('DOCKER_NO_REF');
+        await connector.start(makeContainerNode());
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError);
+        expect((error as PlatformError).code).toBe('DOCKER_START_FAILED');
       }
     });
   });
 
   describe('stop', () => {
-    it('calls POST /containers/{id}/stop', async () => {
-      const connector = new DockerConnector({
-        apiUrl: 'http://192.168.1.10:2375',
-        resourceRef: { containerId: 'abc123' },
-      });
+    it('should POST to stop container endpoint', async () => {
+      mockPost.mockResolvedValueOnce(undefined);
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 204,
-      });
+      const connector = new DockerConnector(makeParentNode());
+      await connector.stop(makeContainerNode());
 
-      await connector.stop();
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://192.168.1.10:2375/containers/abc123/stop',
-        { method: 'POST' },
-      );
+      expect(mockPost).toHaveBeenCalledWith('/containers/abc123def456/stop');
     });
 
-    it('does not throw on 304 (already stopped)', async () => {
-      const connector = new DockerConnector({
-        apiUrl: 'http://192.168.1.10:2375',
-        resourceRef: { containerId: 'abc123' },
-      });
+    it('should throw DOCKER_STOP_FAILED on error', async () => {
+      mockPost.mockRejectedValueOnce(new Error('Docker POST failed (500)'));
 
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 304,
-      });
-
-      await expect(connector.stop()).resolves.toBeUndefined();
-    });
-
-    it('throws PlatformError when no resourceRef', async () => {
-      const connector = new DockerConnector({
-        apiUrl: 'http://192.168.1.10:2375',
-      });
-
-      await expect(connector.stop()).rejects.toThrow(PlatformError);
+      const connector = new DockerConnector(makeParentNode());
+      try {
+        await connector.stop(makeContainerNode());
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError);
+        expect((error as PlatformError).code).toBe('DOCKER_STOP_FAILED');
+      }
     });
   });
 
   describe('getStatus', () => {
-    it('returns online for running container', async () => {
-      const connector = new DockerConnector({
-        apiUrl: 'http://192.168.1.10:2375',
-        resourceRef: { containerId: 'abc123' },
-      });
+    it('should return online when container is running', async () => {
+      mockGet.mockResolvedValueOnce({ State: { Running: true } });
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ State: { Status: 'running' } }),
-      });
-
-      expect(await connector.getStatus()).toBe('online');
+      const connector = new DockerConnector(makeParentNode());
+      const status = await connector.getStatus(makeContainerNode());
+      expect(status).toBe('online');
     });
 
-    it('returns offline for exited container', async () => {
-      const connector = new DockerConnector({
-        apiUrl: 'http://192.168.1.10:2375',
-        resourceRef: { containerId: 'abc123' },
-      });
+    it('should return offline when container is not running', async () => {
+      mockGet.mockResolvedValueOnce({ State: { Running: false } });
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ State: { Status: 'exited' } }),
-      });
-
-      expect(await connector.getStatus()).toBe('offline');
+      const connector = new DockerConnector(makeParentNode());
+      const status = await connector.getStatus(makeContainerNode());
+      expect(status).toBe('offline');
     });
 
-    it('returns error when fetch fails', async () => {
-      const connector = new DockerConnector({
-        apiUrl: 'http://192.168.1.99:2375',
-        resourceRef: { containerId: 'abc123' },
+    it('should return error on request failure', async () => {
+      mockGet.mockRejectedValueOnce(new Error('connection error'));
+
+      const connector = new DockerConnector(makeParentNode());
+      const status = await connector.getStatus(makeContainerNode());
+      expect(status).toBe('error');
+    });
+  });
+
+  describe('getStats', () => {
+    it('should return CPU and RAM usage from Docker stats', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 200_000_000 },
+          system_cpu_usage: 2_000_000_000,
+          online_cpus: 4,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: {
+          usage: 536_870_912,
+          limit: 1_073_741_824,
+          stats: { inactive_file: 0 },
+        },
       });
 
-      mockFetch.mockRejectedValueOnce(new Error('network error'));
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
 
-      expect(await connector.getStatus()).toBe('error');
+      // cpuDelta = 100M, systemDelta = 1000M, ratio = 0.1, * 4 online_cpus = 0.4
+      // RAM: (536870912 - 0) / 1073741824 = 0.5
+      expect(stats).toEqual({ cpuUsage: 0.4, ramUsage: 0.5, rxBytes: 0, txBytes: 0 });
+      expect(mockGet).toHaveBeenCalledWith('/containers/abc123def456/stats?stream=false');
     });
 
-    it('returns unknown when no resourceRef', async () => {
-      const connector = new DockerConnector({
-        apiUrl: 'http://192.168.1.10:2375',
+    it('should return null on API error', async () => {
+      mockGet.mockRejectedValueOnce(new Error('connection error'));
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      expect(stats).toBeNull();
+    });
+
+    it('should subtract page cache (inactive_file) from RAM usage', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 200_000_000 },
+          system_cpu_usage: 2_000_000_000,
+          online_cpus: 2,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: {
+          usage: 536_870_912, // ~512MB
+          limit: 1_073_741_824, // ~1GB
+          stats: { inactive_file: 268_435_456 }, // ~256MB cache
+        },
       });
 
-      expect(await connector.getStatus()).toBe('unknown');
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      // RAM: (536870912 - 268435456) / 1073741824 = 0.25
+      expect(stats).toEqual({ cpuUsage: expect.any(Number), ramUsage: 0.25, rxBytes: 0, txBytes: 0 });
+    });
+
+    it('should handle missing stats or inactive_file gracefully (no cache subtraction)', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 200_000_000 },
+          system_cpu_usage: 2_000_000_000,
+          online_cpus: 2,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: {
+          usage: 536_870_912,
+          limit: 1_073_741_824,
+          // No stats field at all
+        },
+      });
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      // RAM: (536870912 - 0) / 1073741824 = 0.5 (no cache to subtract)
+      expect(stats).toEqual({ cpuUsage: expect.any(Number), ramUsage: 0.5, rxBytes: 0, txBytes: 0 });
+    });
+
+    it('should fallback to 1 when online_cpus is missing or 0', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 200_000_000 },
+          system_cpu_usage: 2_000_000_000,
+          online_cpus: 0, // should fallback to 1
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: {
+          usage: 536_870_912,
+          limit: 1_073_741_824,
+        },
+      });
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      // cpuDelta = 100M, systemDelta = 1000M, ratio = 0.1, * 1 (fallback) = 0.1
+      expect(stats).toEqual({ cpuUsage: 0.1, ramUsage: 0.5, rxBytes: 0, txBytes: 0 });
+    });
+
+    it('should handle zero system delta gracefully', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+          online_cpus: 2,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: {
+          usage: 256_000_000,
+          limit: 1_024_000_000,
+        },
+      });
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      expect(stats).toEqual({ cpuUsage: 0, ramUsage: 0.25, rxBytes: 0, txBytes: 0 });
+    });
+
+    it('should return rxBytes and txBytes from networks field', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 200_000_000 },
+          system_cpu_usage: 2_000_000_000,
+          online_cpus: 2,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: { usage: 256_000_000, limit: 1_024_000_000 },
+        networks: {
+          eth0: { rx_bytes: 5000, tx_bytes: 3000 },
+        },
+      });
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      expect(stats).toEqual(expect.objectContaining({ rxBytes: 5000, txBytes: 3000 }));
+    });
+
+    it('should return rxBytes: 0, txBytes: 0 when networks is absent', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 200_000_000 },
+          system_cpu_usage: 2_000_000_000,
+          online_cpus: 2,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: { usage: 256_000_000, limit: 1_024_000_000 },
+        // No networks field
+      });
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      expect(stats!.rxBytes).toBe(0);
+      expect(stats!.txBytes).toBe(0);
+    });
+
+    it('should sum rxBytes and txBytes across multiple network interfaces', async () => {
+      mockGet.mockResolvedValueOnce({
+        cpu_stats: {
+          cpu_usage: { total_usage: 200_000_000 },
+          system_cpu_usage: 2_000_000_000,
+          online_cpus: 2,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 100_000_000 },
+          system_cpu_usage: 1_000_000_000,
+        },
+        memory_stats: { usage: 256_000_000, limit: 1_024_000_000 },
+        networks: {
+          eth0: { rx_bytes: 1000, tx_bytes: 500 },
+          eth1: { rx_bytes: 2000, tx_bytes: 1500 },
+          br0: { rx_bytes: 300, tx_bytes: 200 },
+        },
+      });
+
+      const connector = new DockerConnector(makeParentNode());
+      const stats = await connector.getStats(makeContainerNode());
+
+      expect(stats!.rxBytes).toBe(3300); // 1000 + 2000 + 300
+      expect(stats!.txBytes).toBe(2200); // 500 + 1500 + 200
+    });
+  });
+
+  describe('listResources', () => {
+    it('should return mapped DockerDiscoveredResource array', async () => {
+      mockGet.mockResolvedValueOnce([
+        {
+          Id: 'abc123',
+          Names: ['/my-nginx'],
+          Image: 'nginx:latest',
+          State: 'running',
+          Status: 'Up 2 hours',
+          Ports: [{ IP: '0.0.0.0', PrivatePort: 80, PublicPort: 8080, Type: 'tcp' }],
+        },
+        {
+          Id: 'def456',
+          Names: ['/my-redis'],
+          Image: 'redis:7',
+          State: 'exited',
+          Status: 'Exited (0) 3 hours ago',
+          Ports: [],
+        },
+      ]);
+
+      const connector = new DockerConnector(makeParentNode());
+      const resources = await connector.listResources();
+
+      expect(resources).toHaveLength(2);
+      expect(resources[0]).toEqual({
+        containerId: 'abc123',
+        name: 'my-nginx',
+        image: 'nginx:latest',
+        state: 'running',
+        status: 'Up 2 hours',
+        ports: [{ IP: '0.0.0.0', PrivatePort: 80, PublicPort: 8080, Type: 'tcp' }],
+      });
+      expect(resources[1]).toEqual({
+        containerId: 'def456',
+        name: 'my-redis',
+        image: 'redis:7',
+        state: 'exited',
+        status: 'Exited (0) 3 hours ago',
+        ports: [],
+      });
+    });
+
+    it('should strip leading / from container names', async () => {
+      mockGet.mockResolvedValueOnce([
+        { Id: 'abc', Names: ['/test-container'], Image: 'alpine', State: 'running', Status: 'Up', Ports: [] },
+      ]);
+
+      const connector = new DockerConnector(makeParentNode());
+      const resources = await connector.listResources();
+      expect(resources[0]!.name).toBe('test-container');
+    });
+
+    it('should throw DOCKER_DISCOVERY_FAILED on error', async () => {
+      mockGet.mockRejectedValueOnce(new Error('connection failed'));
+
+      const connector = new DockerConnector(makeParentNode());
+      try {
+        await connector.listResources();
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError);
+        expect((error as PlatformError).code).toBe('DOCKER_DISCOVERY_FAILED');
+      }
     });
   });
 });

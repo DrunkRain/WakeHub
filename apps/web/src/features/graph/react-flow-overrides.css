@@ -1,0 +1,7 @@
+.react-flow.dark {
+  --xy-background-color: var(--mantine-color-dark-7);
+  --xy-minimap-background-color: var(--mantine-color-dark-8);
+  --xy-controls-button-background-color: var(--mantine-color-dark-5);
+  --xy-controls-button-color: var(--mantine-color-gray-1);
+  --xy-edge-stroke: var(--mantine-color-dark-3);
+}

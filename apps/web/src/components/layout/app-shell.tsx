@@ -6,12 +6,14 @@ import { IconLogout } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { Navigation } from './navigation';
 import { useLogout } from '../../api/auth.api';
+import { useSSE } from '../../hooks/use-sse';
 
 interface AppShellProps {
   children: React.ReactNode;
 }
 
 export function AppShell({ children }: AppShellProps) {
+  useSSE();
   const [opened, { toggle, close }] = useDisclosure();
   const location = useLocation();
   const navigate = useNavigate();
