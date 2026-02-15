@@ -435,8 +435,8 @@ function LogRow({ log, isDesktop, expanded, onToggle, nodeTypeMap }: LogRowProps
         <Table.Td>
           {log.nodeName ? (
             <Group gap={6} wrap="nowrap">
-              {log.nodeId && nodeTypeMap[log.nodeId] && (
-                <NodeTypeIcon type={nodeTypeMap[log.nodeId]} size={16} />
+              {log.nodeId && nodeTypeMap[log.nodeId] != null && (
+                <NodeTypeIcon type={nodeTypeMap[log.nodeId]!} size={16} />
               )}
               <Text size="sm">{log.nodeName}</Text>
             </Group>

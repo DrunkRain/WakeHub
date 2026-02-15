@@ -69,6 +69,6 @@ development_status:
   6-2-page-logs-et-interface-de-diagnostic: done
 
   # Epic 7 : Monitoring Reseau Avance
-  epic-7: backlog
-  7-1-monitoring-reseau-docker-delta-trafic: backlog
-  7-2-monitoring-reseau-proxmox-rrddata: backlog
+  epic-7: done
+  7-1-monitoring-reseau-docker-delta-trafic: done
+  7-2-monitoring-reseau-proxmox-rrddata: done

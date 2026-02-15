@@ -4,6 +4,8 @@ export interface MonitoringCriteria {
   cpuRamActivity: boolean;
   cpuThreshold?: number;
   ramThreshold?: number;
+  networkTraffic: boolean;
+  networkTrafficThreshold?: number;
 }
 
 export interface InactivityRule {

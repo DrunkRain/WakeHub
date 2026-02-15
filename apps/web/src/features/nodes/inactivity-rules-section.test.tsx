@@ -437,6 +437,93 @@ describe('InactivityRulesSection — configurable thresholds', () => {
     expect(screen.getByLabelText(/seuil ram/i)).toBeInTheDocument();
   });
 
+  it('should show networkTraffic checkbox for container nodes', async () => {
+    mockFetchForRules([mockRule]);
+    renderWithProviders('node-1', 'container');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/trafic réseau \(docker api\)/i)).toBeInTheDocument();
+    });
+
+    // Should be enabled for containers
+    expect(screen.getByLabelText(/trafic réseau \(docker api\)/i)).not.toBeDisabled();
+  });
+
+  it('should show networkTraffic checkbox disabled for physical nodes', async () => {
+    mockFetchForRules([mockRule]);
+    renderWithProviders('node-1', 'physical');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/trafic réseau/i)).toBeInTheDocument();
+    });
+
+    // Should be disabled for physical
+    expect(screen.getByLabelText(/trafic réseau/i)).toBeDisabled();
+  });
+
+  it('should show network traffic threshold input when networkTraffic is enabled', async () => {
+    const ruleWithNetworkTraffic = {
+      ...mockRule,
+      monitoringCriteria: { lastAccess: false, networkConnections: false, cpuRamActivity: false, networkTraffic: true, networkTrafficThreshold: 1024 },
+    };
+    mockFetchForRules([ruleWithNetworkTraffic]);
+    renderWithProviders('node-1', 'container');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/seuil trafic réseau/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText(/seuil trafic réseau/i)).toHaveValue('1024');
+  });
+
+  it('should show network traffic threshold after enabling networkTraffic checkbox', async () => {
+    mockFetchForRules([mockRule]);
+    renderWithProviders('node-1', 'container');
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/trafic réseau \(docker api\)/i)).toBeInTheDocument();
+    });
+
+    // No threshold initially
+    expect(screen.queryByLabelText(/seuil trafic réseau/i)).not.toBeInTheDocument();
+
+    // Enable networkTraffic
+    await user.click(screen.getByLabelText(/trafic réseau \(docker api\)/i));
+
+    // Threshold should now be visible
+    await waitFor(() => {
+      expect(screen.getByLabelText(/seuil trafic réseau/i)).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText(/seuil trafic réseau/i)).toHaveValue('1024');
+  });
+
+  // ============================================================
+  // Story 7.2: networkTraffic checkbox enabled for VM/LXC
+  // ============================================================
+
+  it('vm: should have networkTraffic checkbox enabled', async () => {
+    mockFetchForRules([mockRule]);
+    renderWithProviders('node-1', 'vm');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/trafic réseau \(proxmox api\)/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText(/trafic réseau \(proxmox api\)/i)).not.toBeDisabled();
+  });
+
+  it('lxc: should have networkTraffic checkbox enabled', async () => {
+    mockFetchForRules([mockRule]);
+    renderWithProviders('node-1', 'lxc');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/trafic réseau \(proxmox api\)/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText(/trafic réseau \(proxmox api\)/i)).not.toBeDisabled();
+  });
+
   it('should include thresholds in PUT body when saving', async () => {
     const ruleWithThresholds = {
       ...mockRule,

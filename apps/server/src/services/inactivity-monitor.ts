@@ -19,9 +19,11 @@ type RuleRow = typeof inactivityRules.$inferSelect;
 // --- Module-level state ---
 
 const inactivityCounters = new Map<string, number>();
+const networkTrafficCache = new Map<string, { rxBytes: number; txBytes: number }>();
 let monitorInterval: NodeJS.Timeout | null = null;
 const MONITOR_INTERVAL_MS = 60_000;
 const SSH_CHECK_TIMEOUT_MS = 5_000;
+const DEFAULT_NETWORK_TRAFFIC_THRESHOLD = 1024; // 1 KB
 // NOTE: cpuThreshold semantics differ by monitoring method:
 //   - SSH (/proc/loadavg): compared against load average (0-N, where N = core count).
 //     0.5 = "very light" on a 4-core machine (~12.5% total CPU).
@@ -58,6 +60,7 @@ export function stopInactivityMonitor(): void {
     monitorInterval = null;
   }
   inactivityCounters.clear();
+  networkTrafficCache.clear();
 }
 
 export async function checkAllInactivityRules(
@@ -93,6 +96,7 @@ export async function checkAllInactivityRules(
   for (const [nodeId] of inactivityCounters) {
     if (!activeNodeIds.has(nodeId)) {
       inactivityCounters.delete(nodeId);
+      networkTrafficCache.delete(nodeId);
     }
   }
 
@@ -205,6 +209,15 @@ async function checkActivity(
     } else {
       // Fallback to SSH for physical nodes or when platform stats unavailable
       enabledChecks.push(() => checkCpuRamActivity(node, decryptFn, cpuThreshold, ramThreshold));
+    }
+  }
+  if (criteria.networkTraffic) {
+    if ((nodeType === 'container' || nodeType === 'vm' || nodeType === 'lxc') && platformStats && platformStats.rxBytes !== undefined && platformStats.txBytes !== undefined) {
+      const threshold = criteria.networkTrafficThreshold ?? DEFAULT_NETWORK_TRAFFIC_THRESHOLD;
+      const { rxBytes, txBytes } = platformStats;
+      enabledChecks.push(async () =>
+        checkNetworkTraffic(node.id, rxBytes, txBytes, threshold),
+      );
     }
   }
   if (enabledChecks.length === 0) {
@@ -327,6 +340,30 @@ async function checkCpuRamActivity(
   }
 }
 
+function checkNetworkTraffic(
+  nodeId: string,
+  currentRxBytes: number,
+  currentTxBytes: number,
+  threshold: number,
+): boolean {
+  const previous = networkTrafficCache.get(nodeId);
+
+  // Store current values for next tick
+  networkTrafficCache.set(nodeId, { rxBytes: currentRxBytes, txBytes: currentTxBytes });
+
+  if (!previous) {
+    // First tick — no delta possible → safe fallback (active)
+    return true;
+  }
+
+  const delta = (currentRxBytes + currentTxBytes) - (previous.rxBytes + previous.txBytes);
+
+  // Counter reset (e.g. Docker daemon restart) → safe fallback (active)
+  if (delta < 0) return true;
+
+  return delta > threshold;
+}
+
 // --- Auto-shutdown trigger ---
 
 // M4 fix: returns false if cascade already running (caller keeps counter)
@@ -410,6 +447,10 @@ export function _getInactivityCounters(): Map<string, number> {
 
 export function _getMonitorInterval(): NodeJS.Timeout | null {
   return monitorInterval;
+}
+
+export function _getNetworkTrafficCache(): Map<string, { rxBytes: number; txBytes: number }> {
+  return networkTrafficCache;
 }
 
 export { MONITOR_INTERVAL_MS };

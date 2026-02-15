@@ -262,6 +262,32 @@ describe('Inactivity Rules Routes', () => {
       expect(body.error.code).toBe('INACTIVITY_RULE_NOT_FOUND');
     });
 
+    it('should accept networkTraffic and networkTrafficThreshold in monitoringCriteria', async () => {
+      const nodeId = insertNode('Server1');
+      const ruleId = insertRule(nodeId);
+
+      const response = await app.inject({
+        method: 'PUT',
+        url: `/api/inactivity-rules/${ruleId}`,
+        payload: {
+          monitoringCriteria: {
+            lastAccess: false,
+            networkConnections: false,
+            cpuRamActivity: false,
+            networkTraffic: true,
+            networkTrafficThreshold: 2048,
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.data.rule.monitoringCriteria).toEqual(expect.objectContaining({
+        networkTraffic: true,
+        networkTrafficThreshold: 2048,
+      }));
+    });
+
     it('should reject invalid timeoutMinutes', async () => {
       const nodeId = insertNode('Server1');
       const ruleId = insertRule(nodeId);

@@ -28,7 +28,7 @@ interface CriteriaConfig {
   disabledReason?: string;
 }
 
-type CriteriaKey = 'lastAccess' | 'networkConnections' | 'cpuRamActivity';
+type CriteriaKey = 'lastAccess' | 'networkConnections' | 'cpuRamActivity' | 'networkTraffic';
 
 function getCriteriaConfig(nodeType: NodeType): Record<CriteriaKey, CriteriaConfig> {
   switch (nodeType) {
@@ -38,18 +38,21 @@ function getCriteriaConfig(nodeType: NodeType): Record<CriteriaKey, CriteriaConf
         lastAccess: { label: 'Dernier accès (TCP)', disabled: false },
         networkConnections: { label: 'Connexions réseau (SSH)', disabled: true, disabledReason: 'Non disponible pour les VMs/LXCs (compteurs réseau cumulés)' },
         cpuRamActivity: { label: 'Activité CPU/RAM (Proxmox API)', disabled: false },
+        networkTraffic: { label: 'Trafic réseau (Proxmox API)', disabled: false },
       };
     case 'container':
       return {
         lastAccess: { label: 'Dernier accès (CPU/RAM Docker)', disabled: false },
         networkConnections: { label: 'Connexions réseau (SSH)', disabled: true, disabledReason: 'Non disponible pour les conteneurs' },
         cpuRamActivity: { label: 'Activité CPU/RAM (Docker API)', disabled: false },
+        networkTraffic: { label: 'Trafic réseau (Docker API)', disabled: false },
       };
     default: // physical
       return {
         lastAccess: { label: 'Dernier accès (TCP)', disabled: false },
         networkConnections: { label: 'Connexions réseau (SSH)', disabled: false },
         cpuRamActivity: { label: 'Activité CPU/RAM (SSH)', disabled: false },
+        networkTraffic: { label: 'Trafic réseau', disabled: true, disabledReason: 'Non applicable aux machines physiques' },
       };
   }
 }
@@ -73,6 +76,7 @@ export function InactivityRulesSection({ nodeId, nodeType }: InactivityRulesSect
     lastAccess: true,
     networkConnections: false,
     cpuRamActivity: false,
+    networkTraffic: false,
   });
 
   // Sync form state only when a different rule loads (not on background refetches)
@@ -84,7 +88,7 @@ export function InactivityRulesSection({ nodeId, nodeType }: InactivityRulesSect
       // Force disabled criteria to false so visual state matches persisted state
       const config = getCriteriaConfig(nodeType);
       const cleaned = { ...rule.monitoringCriteria };
-      for (const key of ['lastAccess', 'networkConnections', 'cpuRamActivity'] as const) {
+      for (const key of ['lastAccess', 'networkConnections', 'cpuRamActivity', 'networkTraffic'] as const) {
         if (config[key].disabled) cleaned[key] = false;
       }
       setCriteria(cleaned);
@@ -240,6 +244,11 @@ export function InactivityRulesSection({ nodeId, nodeType }: InactivityRulesSect
           cpuRamActivity: v,
           ...(v && criteria.cpuThreshold === undefined ? { cpuThreshold: 0.5, ramThreshold: 0.5 } : {}),
         }))}
+        {renderCriteriaCheckbox('networkTraffic', criteria.networkTraffic ?? false, (v) => setCriteria({
+          ...criteria,
+          networkTraffic: v,
+          ...(v && criteria.networkTrafficThreshold === undefined ? { networkTrafficThreshold: 1024 } : {}),
+        }))}
 
         {criteria.cpuRamActivity && (
           <Group grow>
@@ -262,6 +271,18 @@ export function InactivityRulesSection({ nodeId, nodeType }: InactivityRulesSect
               max={100}
             />
           </Group>
+        )}
+
+        {criteria.networkTraffic && (
+          <NumberInput
+            label="Seuil trafic réseau (bytes)"
+            description="Delta minimum de bytes (rx+tx) entre deux ticks pour considérer le noeud actif"
+            value={criteria.networkTrafficThreshold ?? 1024}
+            onChange={(val) => {
+              if (typeof val === 'number') setCriteria({ ...criteria, networkTrafficThreshold: val });
+            }}
+            min={0}
+          />
         )}
 
         <Group>

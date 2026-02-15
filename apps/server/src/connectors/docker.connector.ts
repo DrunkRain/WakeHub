@@ -35,6 +35,7 @@ interface DockerStatsResponse {
     limit: number;
     stats?: { inactive_file?: number };
   };
+  networks?: Record<string, { rx_bytes: number; tx_bytes: number }>;
 }
 
 export class DockerConnector implements PlatformConnector {
@@ -113,7 +114,16 @@ export class DockerConnector implements PlatformConnector {
       const cacheUsage = data.memory_stats.stats?.inactive_file ?? 0;
       const ramUsage = data.memory_stats.limit > 0 ? Math.max(0, data.memory_stats.usage - cacheUsage) / data.memory_stats.limit : 0;
 
-      return { cpuUsage, ramUsage };
+      let rxBytes = 0;
+      let txBytes = 0;
+      if (data.networks) {
+        for (const iface of Object.values(data.networks)) {
+          rxBytes += iface.rx_bytes;
+          txBytes += iface.tx_bytes;
+        }
+      }
+
+      return { cpuUsage, ramUsage, rxBytes, txBytes };
     } catch {
       return null;
     }

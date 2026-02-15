@@ -302,6 +302,36 @@ describe('ProxmoxConnector', () => {
 
       expect(stats).toEqual({ cpuUsage: 0.5, ramUsage: 0 });
     });
+
+    it('should return rxBytes/txBytes when netin/netout are present (VM)', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.35, maxcpu: 4, mem: 2147483648, maxmem: 4294967296, netin: 123456, netout: 654321 });
+      const node = makeVmNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.35, ramUsage: 0.5, rxBytes: 123456, txBytes: 654321 });
+    });
+
+    it('should return rxBytes/txBytes when netin/netout are present (LXC)', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.1, maxcpu: 2, mem: 1073741824, maxmem: 2147483648, netin: 500000, netout: 300000 });
+      const node = makeLxcNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.1, ramUsage: 0.5, rxBytes: 500000, txBytes: 300000 });
+      expect(mockGet).toHaveBeenCalledWith('/nodes/pve1/lxc/200/status/current');
+    });
+
+    it('should not return rxBytes/txBytes when netin/netout are absent', async () => {
+      mockGet.mockResolvedValueOnce({ cpu: 0.2, maxcpu: 4, mem: 1073741824, maxmem: 4294967296 });
+      const node = makeVmNode();
+
+      const stats = await connector.getStats(node);
+
+      expect(stats).toEqual({ cpuUsage: 0.2, ramUsage: 0.25 });
+      expect(stats).not.toHaveProperty('rxBytes');
+      expect(stats).not.toHaveProperty('txBytes');
+    });
   });
 
   describe('listResources', () => {

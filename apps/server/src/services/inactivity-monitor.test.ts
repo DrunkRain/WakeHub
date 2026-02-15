@@ -80,6 +80,7 @@ import {
   checkAllInactivityRules,
   _getInactivityCounters,
   _getMonitorInterval,
+  _getNetworkTrafficCache,
 } from './inactivity-monitor.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -164,6 +165,7 @@ beforeEach(() => {
   sqlite.exec('DELETE FROM dependency_links');
   sqlite.exec('DELETE FROM nodes');
   _getInactivityCounters().clear();
+  _getNetworkTrafficCache().clear();
   mockExecuteCascadeStop.mockReset();
   mockExecuteCascadeStop.mockResolvedValue(undefined);
   tcpCheckResult.value = true; // default: node is reachable
@@ -1433,5 +1435,301 @@ describe('checkAllInactivityRules — configurable thresholds', () => {
 
     // CPU 0.1 > 0.05 → active
     expect(_getInactivityCounters().get(containerId) ?? 0).toBe(0);
+  });
+});
+
+// ============================================================
+// Story 7.1: networkTraffic check (delta trafic Docker)
+// ============================================================
+
+describe('checkAllInactivityRules — networkTraffic check', () => {
+  it('should consider container active on first tick (safe fallback, no previous data)', async () => {
+    const parentId = insertNode('DockerHost', 'physical', {
+      capabilities: { docker_api: { host: '10.0.0.1', port: 2375 } },
+    });
+    const containerId = insertNode('MyContainer', 'container', {
+      parentId,
+      ipAddress: null,
+      sshUser: null,
+      platformRef: { platform: 'docker', platformId: 'abc123' },
+    });
+    insertRule(containerId, {
+      timeoutMinutes: 5,
+      monitoringCriteria: { lastAccess: false, networkConnections: false, cpuRamActivity: false, networkTraffic: true },
+    });
+
+    // Platform connector returns stats with network bytes
+    mockGetStats.mockResolvedValueOnce({ cpuUsage: 0.1, ramUsage: 0.1, rxBytes: 5000, txBytes: 3000 });
+    mockGetConnector.mockReturnValue({ getStats: mockGetStats });
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    // First tick → safe fallback → active (counter = 0)
+    expect(_getInactivityCounters().get(containerId) ?? 0).toBe(0);
+    // Cache should have the current bytes stored
+    expect(_getNetworkTrafficCache().get(containerId)).toEqual({ rxBytes: 5000, txBytes: 3000 });
+  });
+
+  it('should consider container active when delta > threshold', async () => {
+    const parentId = insertNode('DockerHost', 'physical', {
+      capabilities: { docker_api: { host: '10.0.0.1', port: 2375 } },
+    });
+    const containerId = insertNode('MyContainer', 'container', {
+      parentId,
+      ipAddress: null,
+      sshUser: null,
+      platformRef: { platform: 'docker', platformId: 'abc123' },
+    });
+    insertRule(containerId, {
+      timeoutMinutes: 5,
+      monitoringCriteria: { lastAccess: false, networkConnections: false, cpuRamActivity: false, networkTraffic: true },
+    });
+
+    // Seed cache with previous values
+    _getNetworkTrafficCache().set(containerId, { rxBytes: 5000, txBytes: 3000 });
+
+    // Current stats: rx + tx = 10000 + 5000 = 15000, previous = 5000 + 3000 = 8000, delta = 7000 > 1024
+    mockGetStats.mockResolvedValueOnce({ cpuUsage: 0.1, ramUsage: 0.1, rxBytes: 10000, txBytes: 5000 });
+    mockGetConnector.mockReturnValue({ getStats: mockGetStats });
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    // Delta > threshold → active
+    expect(_getInactivityCounters().get(containerId) ?? 0).toBe(0);
+  });
+
+  it('should consider container inactive when delta <= threshold', async () => {
+    const parentId = insertNode('DockerHost', 'physical', {
+      capabilities: { docker_api: { host: '10.0.0.1', port: 2375 } },
+    });
+    const containerId = insertNode('MyContainer', 'container', {
+      parentId,
+      ipAddress: null,
+      sshUser: null,
+      platformRef: { platform: 'docker', platformId: 'abc123' },
+    });
+    insertRule(containerId, {
+      timeoutMinutes: 5,
+      monitoringCriteria: { lastAccess: false, networkConnections: false, cpuRamActivity: false, networkTraffic: true },
+    });
+
+    // Seed cache with previous values
+    _getNetworkTrafficCache().set(containerId, { rxBytes: 5000, txBytes: 3000 });
+
+    // Current stats: rx + tx = 5500 + 3200 = 8700, previous = 5000 + 3000 = 8000, delta = 700 <= 1024
+    mockGetStats.mockResolvedValueOnce({ cpuUsage: 0.1, ramUsage: 0.1, rxBytes: 5500, txBytes: 3200 });
+    mockGetConnector.mockReturnValue({ getStats: mockGetStats });
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    // Delta <= threshold → inactive
+    expect(_getInactivityCounters().get(containerId)).toBe(1);
+  });
+
+  it('should use custom networkTrafficThreshold when specified', async () => {
+    const parentId = insertNode('DockerHost', 'physical', {
+      capabilities: { docker_api: { host: '10.0.0.1', port: 2375 } },
+    });
+    const containerId = insertNode('MyContainer', 'container', {
+      parentId,
+      ipAddress: null,
+      sshUser: null,
+      platformRef: { platform: 'docker', platformId: 'abc123' },
+    });
+    insertRule(containerId, {
+      timeoutMinutes: 5,
+      monitoringCriteria: { lastAccess: false, networkConnections: false, cpuRamActivity: false, networkTraffic: true, networkTrafficThreshold: 10000 },
+    });
+
+    // Seed cache
+    _getNetworkTrafficCache().set(containerId, { rxBytes: 5000, txBytes: 3000 });
+
+    // Delta = 7000, custom threshold = 10000 → 7000 <= 10000 → inactive
+    mockGetStats.mockResolvedValueOnce({ cpuUsage: 0.1, ramUsage: 0.1, rxBytes: 10000, txBytes: 5000 });
+    mockGetConnector.mockReturnValue({ getStats: mockGetStats });
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    expect(_getInactivityCounters().get(containerId)).toBe(1);
+  });
+
+  it('should skip networkTraffic check for physical nodes', async () => {
+    const nodeId = insertNode('Server1', 'physical');
+    insertRule(nodeId, {
+      timeoutMinutes: 5,
+      monitoringCriteria: { lastAccess: false, networkConnections: false, cpuRamActivity: false, networkTraffic: true },
+    });
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    // Physical node with only networkTraffic → skipped → no checks → active (safe fallback)
+    expect(_getInactivityCounters().get(nodeId) ?? 0).toBe(0);
+  });
+
+  it('should clean up networkTrafficCache when node is no longer active', async () => {
+    const nodeId = insertNode('Server1', 'physical', { status: 'offline' });
+    insertRule(nodeId, { timeoutMinutes: 5, isEnabled: true });
+
+    // Seed both caches
+    _getInactivityCounters().set(nodeId, 3);
+    _getNetworkTrafficCache().set(nodeId, { rxBytes: 1000, txBytes: 500 });
+
+    // Create an active node so the cleanup runs
+    const activeId = insertNode('ActiveServer', 'physical');
+    insertRule(activeId, { timeoutMinutes: 5 });
+    simulateTcpCheck(true);
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    // Offline node's cache entries should be cleaned up
+    expect(_getNetworkTrafficCache().has(nodeId)).toBe(false);
+    expect(_getInactivityCounters().has(nodeId)).toBe(false);
+  });
+
+  it('should consider container active on counter reset (negative delta, e.g. Docker restart)', async () => {
+    const parentId = insertNode('DockerHost', 'physical', {
+      capabilities: { docker_api: { host: '10.0.0.1', port: 2375 } },
+    });
+    const containerId = insertNode('MyContainer', 'container', {
+      parentId,
+      ipAddress: null,
+      sshUser: null,
+      platformRef: { platform: 'docker', platformId: 'abc123' },
+    });
+    insertRule(containerId, {
+      timeoutMinutes: 5,
+      monitoringCriteria: { lastAccess: false, networkConnections: false, cpuRamActivity: false, networkTraffic: true },
+    });
+
+    // Seed cache with high previous values (before Docker restart)
+    _getNetworkTrafficCache().set(containerId, { rxBytes: 50000, txBytes: 30000 });
+
+    // After Docker restart: counters reset to 0
+    mockGetStats.mockResolvedValueOnce({ cpuUsage: 0.1, ramUsage: 0.1, rxBytes: 100, txBytes: 50 });
+    mockGetConnector.mockReturnValue({ getStats: mockGetStats });
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    // Negative delta → safe fallback → active (counter = 0)
+    expect(_getInactivityCounters().get(containerId) ?? 0).toBe(0);
+  });
+
+  // ============================================================
+  // Story 7.2: networkTraffic for VM/LXC (Proxmox rrddata)
+  // ============================================================
+
+  it('VM: should consider active when networkTraffic delta > threshold', async () => {
+    const parentId = insertNode('ProxmoxHost', 'physical', {
+      capabilities: { proxmox_api: { host: '10.0.0.1', port: 8006, authType: 'token' } },
+    });
+    const vmId = insertNode('MyVM', 'vm', {
+      parentId,
+      ipAddress: '10.0.0.10',
+      sshUser: 'root',
+      platformRef: { platform: 'proxmox', platformId: 'pve1/100', node: 'pve1', vmid: 100, type: 'qemu' },
+    });
+    insertRule(vmId, {
+      timeoutMinutes: 5,
+      monitoringCriteria: { lastAccess: false, networkConnections: false, cpuRamActivity: false, networkTraffic: true },
+    });
+
+    // Seed cache with previous values
+    _getNetworkTrafficCache().set(vmId, { rxBytes: 5000, txBytes: 3000 });
+
+    // Delta = (10000 + 5000) - (5000 + 3000) = 7000 > 1024
+    mockGetStats.mockResolvedValueOnce({ cpuUsage: 0.1, ramUsage: 0.1, rxBytes: 10000, txBytes: 5000 });
+    mockGetConnector.mockReturnValue({ getStats: mockGetStats });
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    expect(_getInactivityCounters().get(vmId) ?? 0).toBe(0); // active
+  });
+
+  it('VM: should consider inactive when networkTraffic delta <= threshold', async () => {
+    const parentId = insertNode('ProxmoxHost', 'physical', {
+      capabilities: { proxmox_api: { host: '10.0.0.1', port: 8006, authType: 'token' } },
+    });
+    const vmId = insertNode('MyVM', 'vm', {
+      parentId,
+      ipAddress: '10.0.0.10',
+      sshUser: 'root',
+      platformRef: { platform: 'proxmox', platformId: 'pve1/100', node: 'pve1', vmid: 100, type: 'qemu' },
+    });
+    insertRule(vmId, {
+      timeoutMinutes: 5,
+      monitoringCriteria: { lastAccess: false, networkConnections: false, cpuRamActivity: false, networkTraffic: true },
+    });
+
+    // Seed cache with previous values
+    _getNetworkTrafficCache().set(vmId, { rxBytes: 5000, txBytes: 3000 });
+
+    // Delta = (5500 + 3200) - (5000 + 3000) = 700 <= 1024
+    mockGetStats.mockResolvedValueOnce({ cpuUsage: 0.1, ramUsage: 0.1, rxBytes: 5500, txBytes: 3200 });
+    mockGetConnector.mockReturnValue({ getStats: mockGetStats });
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    expect(_getInactivityCounters().get(vmId)).toBe(1); // inactive
+  });
+
+  it('VM: should consider active on first tick (safe fallback, no previous data)', async () => {
+    const parentId = insertNode('ProxmoxHost', 'physical', {
+      capabilities: { proxmox_api: { host: '10.0.0.1', port: 8006, authType: 'token' } },
+    });
+    const vmId = insertNode('MyVM', 'vm', {
+      parentId,
+      ipAddress: '10.0.0.10',
+      sshUser: 'root',
+      platformRef: { platform: 'proxmox', platformId: 'pve1/100', node: 'pve1', vmid: 100, type: 'qemu' },
+    });
+    insertRule(vmId, {
+      timeoutMinutes: 5,
+      monitoringCriteria: { lastAccess: false, networkConnections: false, cpuRamActivity: false, networkTraffic: true },
+    });
+
+    // No cache seeded → first tick
+    mockGetStats.mockResolvedValueOnce({ cpuUsage: 0.1, ramUsage: 0.1, rxBytes: 5000, txBytes: 3000 });
+    mockGetConnector.mockReturnValue({ getStats: mockGetStats });
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    expect(_getInactivityCounters().get(vmId) ?? 0).toBe(0); // active (safe fallback)
+    expect(_getNetworkTrafficCache().get(vmId)).toEqual({ rxBytes: 5000, txBytes: 3000 });
+  });
+
+  it('LXC: should consider active when networkTraffic delta > threshold', async () => {
+    const parentId = insertNode('ProxmoxHost', 'physical', {
+      capabilities: { proxmox_api: { host: '10.0.0.1', port: 8006, authType: 'token' } },
+    });
+    const lxcId = insertNode('MyLXC', 'lxc', {
+      parentId,
+      ipAddress: '10.0.0.20',
+      sshUser: 'root',
+      platformRef: { platform: 'proxmox', platformId: 'pve1/200', node: 'pve1', vmid: 200, type: 'lxc' },
+    });
+    insertRule(lxcId, {
+      timeoutMinutes: 5,
+      monitoringCriteria: { lastAccess: false, networkConnections: false, cpuRamActivity: false, networkTraffic: true },
+    });
+
+    // Seed cache with previous values
+    _getNetworkTrafficCache().set(lxcId, { rxBytes: 5000, txBytes: 3000 });
+
+    // Delta = (10000 + 5000) - (5000 + 3000) = 7000 > 1024
+    mockGetStats.mockResolvedValueOnce({ cpuUsage: 0.1, ramUsage: 0.1, rxBytes: 10000, txBytes: 5000 });
+    mockGetConnector.mockReturnValue({ getStats: mockGetStats });
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    expect(_getInactivityCounters().get(lxcId) ?? 0).toBe(0); // active
+  });
+
+  it('should clear networkTrafficCache on stopInactivityMonitor', () => {
+    vi.useFakeTimers();
+    startInactivityMonitor(db, mockSseManager as any, mockDecryptFn);
+    _getNetworkTrafficCache().set('test-node', { rxBytes: 1000, txBytes: 500 });
+    stopInactivityMonitor();
+    expect(_getNetworkTrafficCache().size).toBe(0);
+    vi.useRealTimers();
   });
 });

@@ -87,12 +87,16 @@ export class ProxmoxConnector implements PlatformConnector {
     const { pveNode, vmid, vmType } = this.extractPlatformRef(node);
     const client = this.createClient();
     try {
-      const data = await client.get<{ cpu: number; maxcpu: number; mem: number; maxmem: number }>(
-        `/nodes/${pveNode}/${vmType}/${vmid}/status/current`,
-      );
+      const data = await client.get<{
+        cpu: number; maxcpu: number; mem: number; maxmem: number;
+        netin?: number; netout?: number;
+      }>(`/nodes/${pveNode}/${vmType}/${vmid}/status/current`);
       return {
         cpuUsage: data.cpu,
         ramUsage: data.maxmem > 0 ? data.mem / data.maxmem : 0,
+        ...(data.netin !== undefined && data.netout !== undefined
+          ? { rxBytes: data.netin, txBytes: data.netout }
+          : {}),
       };
     } catch {
       return null;

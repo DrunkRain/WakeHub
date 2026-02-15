@@ -30,6 +30,8 @@ const ruleSchema = {
         cpuRamActivity: { type: 'boolean' as const },
         cpuThreshold: { type: 'number' as const },
         ramThreshold: { type: 'number' as const },
+        networkTraffic: { type: 'boolean' as const },
+        networkTrafficThreshold: { type: 'number' as const },
       },
     },
     isEnabled: { type: 'boolean' as const },
@@ -46,6 +48,8 @@ const monitoringCriteriaSchema = {
     cpuRamActivity: { type: 'boolean' as const },
     cpuThreshold: { type: 'number' as const, minimum: 0.01, maximum: 1.0 },
     ramThreshold: { type: 'number' as const, minimum: 0.01, maximum: 1.0 },
+    networkTraffic: { type: 'boolean' as const },
+    networkTrafficThreshold: { type: 'number' as const, minimum: 0 },
   },
   additionalProperties: false,
 };
@@ -115,7 +119,7 @@ const inactivityRulesRoutes: FastifyPluginAsync = async (fastify) => {
   // PUT /api/inactivity-rules/:id
   fastify.put<{
     Params: { id: string };
-    Body: { timeoutMinutes?: number; monitoringCriteria?: { lastAccess: boolean; networkConnections: boolean; cpuRamActivity: boolean; cpuThreshold?: number; ramThreshold?: number }; isEnabled?: boolean };
+    Body: { timeoutMinutes?: number; monitoringCriteria?: { lastAccess: boolean; networkConnections: boolean; cpuRamActivity: boolean; cpuThreshold?: number; ramThreshold?: number; networkTraffic: boolean; networkTrafficThreshold?: number }; isEnabled?: boolean };
   }>(
     '/:id',
     {
@@ -193,7 +197,7 @@ const inactivityRulesRoutes: FastifyPluginAsync = async (fastify) => {
     Body: {
       nodeId: string;
       timeoutMinutes?: number;
-      monitoringCriteria?: { lastAccess: boolean; networkConnections: boolean; cpuRamActivity: boolean; cpuThreshold?: number; ramThreshold?: number };
+      monitoringCriteria?: { lastAccess: boolean; networkConnections: boolean; cpuRamActivity: boolean; cpuThreshold?: number; ramThreshold?: number; networkTraffic: boolean; networkTrafficThreshold?: number };
       isEnabled?: boolean;
     };
   }>(

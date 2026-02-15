@@ -180,7 +180,7 @@ export const inactivityRules = sqliteTable('inactivity_rules', {
   monitoringCriteria: text('monitoring_criteria', { mode: 'json' })
     .$type<MonitoringCriteria>()
     .notNull()
-    .$defaultFn(() => ({ lastAccess: true, networkConnections: false, cpuRamActivity: false })),
+    .$defaultFn(() => ({ lastAccess: true, networkConnections: false, cpuRamActivity: false, networkTraffic: false })),
   isEnabled: integer('is_enabled', { mode: 'boolean' }).notNull().default(true),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
