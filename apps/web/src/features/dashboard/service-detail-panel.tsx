@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, Link } from 'react-router';
 import {
   Drawer,
   Group,
@@ -10,18 +10,20 @@ import {
   Tabs,
   Modal,
   Loader,
+  Anchor,
+  Badge,
 } from '@mantine/core';
 import {
   IconX,
   IconPencil,
   IconExternalLink,
-  IconClock,
 } from '@tabler/icons-react';
 import { StatusBadge } from '../../components/shared/status-badge';
 import { NodeTypeIcon } from '../../components/shared/node-type-icon';
 import { CascadeProgress } from './cascade-progress';
 import { useCascadeForNode } from '../../stores/cascade.store';
 import { useDependencies } from '../../api/dependencies.api';
+import { useLogsQuery } from '../../api/logs.api';
 import type { NodeType, NodeStatus } from '@wakehub/shared';
 
 export interface ServiceDetailNode {
@@ -54,6 +56,10 @@ export function ServiceDetailPanel({
   const [stopModalOpened, setStopModalOpened] = useState(false);
   const cascadeState = useCascadeForNode(node?.id ?? '');
   const { data: depsData, isLoading: depsLoading } = useDependencies(node?.id ?? '');
+  const { data: logsData, isLoading: logsLoading } = useLogsQuery(
+    node ? { nodeId: node.id, limit: 5 } : {},
+    { enabled: !!node },
+  );
 
   const upstream = depsData?.data.upstream ?? [];
   const downstream = depsData?.data.downstream ?? [];
@@ -137,10 +143,28 @@ export function ServiceDetailPanel({
                 </Tabs.Panel>
 
                 <Tabs.Panel value="logs" pt="md">
-                  <Stack align="center" gap="md" py="xl">
-                    <IconClock size={36} stroke={1.5} color="var(--mantine-color-dark-3)" />
-                    <Text size="sm" c="dimmed" ta="center">Logs disponibles bientôt</Text>
-                  </Stack>
+                  {logsLoading ? (
+                    <Loader size="sm" />
+                  ) : (logsData?.data.logs.length ?? 0) === 0 ? (
+                    <Text size="sm" c="dimmed">Aucun log pour ce noeud</Text>
+                  ) : (
+                    <Stack gap="xs">
+                      {logsData!.data.logs.map((log) => (
+                        <Group key={log.id} gap="sm" p="xs" style={{ border: '1px solid var(--mantine-color-dark-4)', borderRadius: 'var(--mantine-radius-sm)' }}>
+                          <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+                            {new Date(log.timestamp).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'medium' })}
+                          </Text>
+                          <Badge size="xs" color={log.level === 'error' ? 'red' : log.level === 'warn' ? 'yellow' : 'blue'}>
+                            {log.level}
+                          </Badge>
+                          <Text size="sm" style={{ flex: 1 }} lineClamp={1}>{log.message}</Text>
+                        </Group>
+                      ))}
+                      <Anchor component={Link} to={`/logs?nodeId=${node.id}`} size="sm" ta="center">
+                        Voir tous les logs
+                      </Anchor>
+                    </Stack>
+                  )}
                 </Tabs.Panel>
               </Tabs>
             </div>

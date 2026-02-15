@@ -419,6 +419,57 @@ describe('executeCascadeStart', () => {
     expect(logs.length).toBeGreaterThan(0);
     expect(logs.some((l) => l.source === 'cascade-engine')).toBe(true);
   });
+
+  it('should set enriched fields (nodeId, nodeName, eventType, cascadeId) on success logs', async () => {
+    const nodeId = insertNode('MyServer', 'physical', { status: 'offline' });
+    const cascadeId = insertCascade(nodeId, 'start');
+
+    mockGetStatus.mockResolvedValue('online');
+
+    await executeCascadeStart(nodeId, db, { cascadeId });
+
+    const logs = getLogs();
+    const startLog = logs.find((l) => l.eventType === 'start' && l.nodeId === nodeId);
+    expect(startLog).toBeDefined();
+    expect(startLog!.nodeName).toBe('MyServer');
+    expect(startLog!.cascadeId).toBe(cascadeId);
+    expect(startLog!.source).toBe('cascade-engine');
+  });
+
+  it('should set enriched fields on error logs with PlatformError code', async () => {
+    const nodeId = insertNode('BrokenServer', 'physical', { status: 'offline' });
+    const cascadeId = insertCascade(nodeId, 'start');
+
+    const { PlatformError } = await import('../utils/platform-error.js');
+    mockStart.mockRejectedValue(new PlatformError('PROXMOX_START_FAILED', 'VM failed to start', 'proxmox', { vmid: 100 }));
+
+    await executeCascadeStart(nodeId, db, { cascadeId });
+
+    const logs = getLogs();
+    const errorLog = logs.find((l) => l.level === 'error' && l.nodeId === nodeId);
+    expect(errorLog).toBeDefined();
+    expect(errorLog!.eventType).toBe('error');
+    expect(errorLog!.errorCode).toBe('PROXMOX_START_FAILED');
+    expect(errorLog!.cascadeId).toBe(cascadeId);
+    expect(errorLog!.nodeName).toBe('BrokenServer');
+    expect(errorLog!.errorDetails).toEqual(expect.objectContaining({ platform: 'proxmox', vmid: 100 }));
+  });
+
+  it('should set decision eventType when skipping online nodes', async () => {
+    const physicalId = insertNode('Physical', 'physical', { status: 'online' });
+    const vmId = insertNode('VM', 'vm', { parentId: physicalId, status: 'offline' });
+
+    const cascadeId = insertCascade(vmId, 'start');
+    mockGetStatus.mockResolvedValue('online');
+
+    await executeCascadeStart(vmId, db, { cascadeId });
+
+    const logs = getLogs();
+    const decisionLog = logs.find((l) => l.eventType === 'decision' && l.nodeId === physicalId);
+    expect(decisionLog).toBeDefined();
+    expect(decisionLog!.nodeName).toBe('Physical');
+    expect(decisionLog!.cascadeId).toBe(cascadeId);
+  });
 });
 
 // ============================================================

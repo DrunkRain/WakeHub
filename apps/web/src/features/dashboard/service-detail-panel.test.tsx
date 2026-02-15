@@ -116,10 +116,16 @@ describe('ServiceDetailPanel', () => {
     expect(screen.getByText('Proxmox-01')).toBeInTheDocument();
   });
 
-  it('should render logs placeholder in the logs tab', async () => {
+  it('should render logs content in the logs tab', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { logs: [], total: 0 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
     renderPanel();
     await userEvent.click(screen.getByRole('tab', { name: /Logs/i }));
-    expect(screen.getByText('Logs disponibles bientôt')).toBeInTheDocument();
+    expect(await screen.findByText('Aucun log pour ce noeud')).toBeInTheDocument();
   });
 
   it('should render "Démarrer" button for offline node', () => {
@@ -182,6 +188,44 @@ describe('ServiceDetailPanel', () => {
 
     renderPanel({ node: { ...defaultNode, status: 'starting' } });
     expect(screen.getByText('NAS-Storage')).toBeInTheDocument();
+  });
+
+  it('should render actual logs and "Voir tous les logs" link in logs tab', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        data: {
+          logs: [
+            {
+              id: 'log-1',
+              timestamp: '2026-02-15T14:30:00.000Z',
+              level: 'info',
+              source: 'cascade-engine',
+              message: 'Service démarré OK',
+              reason: null,
+              details: null,
+              nodeId: 'node-1',
+              nodeName: 'Mon Serveur',
+              eventType: 'start',
+              errorCode: null,
+              errorDetails: null,
+              cascadeId: null,
+            },
+          ],
+          total: 1,
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    renderPanel();
+    await userEvent.click(screen.getByRole('tab', { name: /Logs/i }));
+
+    expect(await screen.findByText('Service démarré OK')).toBeInTheDocument();
+    const link = screen.getByText('Voir tous les logs');
+    expect(link).toBeInTheDocument();
+    expect(link.closest('a')).toHaveAttribute('href', '/logs?nodeId=node-1');
   });
 
   it('should show downstream deps in stop modal', async () => {

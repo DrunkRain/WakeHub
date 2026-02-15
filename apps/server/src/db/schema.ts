@@ -23,7 +23,7 @@ export const users = sqliteTable('users', {
 
 /**
  * Table operation_logs — Persistance des logs d'opérations (pino + DB)
- * Implémentée dans Story 1.3
+ * Implémentée dans Story 1.3, enrichie dans Story 6.1
  */
 export const operationLogs = sqliteTable('operation_logs', {
   id: text('id')
@@ -37,6 +37,12 @@ export const operationLogs = sqliteTable('operation_logs', {
   message: text('message').notNull(),
   reason: text('reason'),
   details: text('details', { mode: 'json' }),
+  nodeId: text('node_id'),
+  nodeName: text('node_name'),
+  eventType: text('event_type'),
+  errorCode: text('error_code'),
+  errorDetails: text('error_details', { mode: 'json' }),
+  cascadeId: text('cascade_id'),
 });
 
 /**

@@ -64,9 +64,9 @@ development_status:
   5-5-seuils-cpu-ram-configurables: done
 
   # Epic 6 : Journalisation & Diagnostic
-  epic-6: backlog
-  6-1-enrichissement-du-logging-et-persistance-complete: backlog
-  6-2-page-logs-et-interface-de-diagnostic: backlog
+  epic-6: done
+  6-1-enrichissement-du-logging-et-persistance-complete: done
+  6-2-page-logs-et-interface-de-diagnostic: done
 
   # Epic 7 : Monitoring Reseau Avance
   epic-7: backlog

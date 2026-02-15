@@ -449,6 +449,65 @@ describe('checkAllInactivityRules — logging', () => {
       l.message.includes('Activité détectée'),
     )).toBe(true);
   });
+
+  it('should set enriched fields (nodeId, nodeName, eventType) on auto-shutdown log', async () => {
+    const nodeId = insertNode('ServerShutdown', 'physical');
+    insertRule(nodeId, { timeoutMinutes: 1 });
+
+    simulateTcpCheck(false);
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    const logs = getLogs();
+    const shutdownLog = logs.find((l) =>
+      l.source === 'inactivity-monitor' &&
+      l.eventType === 'auto-shutdown',
+    );
+    expect(shutdownLog).toBeDefined();
+    expect(shutdownLog!.nodeId).toBe(nodeId);
+    expect(shutdownLog!.nodeName).toBe('ServerShutdown');
+  });
+
+  it('should set enriched fields (nodeId, nodeName, eventType=decision) on activity reset log', async () => {
+    const nodeId = insertNode('ServerReset', 'physical');
+    insertRule(nodeId, { timeoutMinutes: 10 });
+    _getInactivityCounters().set(nodeId, 3);
+
+    simulateTcpCheck(true);
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    const logs = getLogs();
+    const decisionLog = logs.find((l) =>
+      l.source === 'inactivity-monitor' &&
+      l.eventType === 'decision' &&
+      l.nodeId === nodeId,
+    );
+    expect(decisionLog).toBeDefined();
+    expect(decisionLog!.nodeName).toBe('ServerReset');
+  });
+
+  it('should set enriched fields on active dependent cancellation log', async () => {
+    const nodeA = insertNode('ServerA', 'physical');
+    insertRule(nodeA, { timeoutMinutes: 1 });
+
+    const nodeB = insertNode('DependentB', 'physical', { status: 'online' });
+    insertDependency(nodeB, nodeA);
+
+    simulateTcpCheck(false);
+
+    await checkAllInactivityRules(db, mockSseManager as any, mockDecryptFn);
+
+    const logs = getLogs();
+    const cancelLog = logs.find((l) =>
+      l.source === 'inactivity-monitor' &&
+      l.eventType === 'decision' &&
+      l.nodeId === nodeA,
+    );
+    expect(cancelLog).toBeDefined();
+    expect(cancelLog!.nodeName).toBe('ServerA');
+    expect(cancelLog!.message).toContain('annulé');
+  });
 });
 
 // ============================================================

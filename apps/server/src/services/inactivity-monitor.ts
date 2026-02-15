@@ -1,13 +1,14 @@
 import { eq, and, inArray } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { MonitoringCriteria, NodeStats, NodeType } from '@wakehub/shared';
-import { nodes, inactivityRules, cascades, operationLogs } from '../db/schema.js';
+import { nodes, inactivityRules, cascades } from '../db/schema.js';
 import type * as schema from '../db/schema.js';
 import { executeCascadeStop } from './cascade-engine.js';
 import { getDownstreamDependents } from './dependency-graph.js';
 import { getConnector } from '../connectors/connector-factory.js';
 import type { SSEManager } from '../sse/sse-manager.js';
 import { broadcastCascadeEvent } from '../sse/broadcast-helpers.js';
+import { logOperation } from '../utils/log-operation.js';
 import net from 'node:net';
 import { NodeSSH } from 'node-ssh';
 
@@ -45,6 +46,7 @@ export function startInactivityMonitor(
         `Erreur lors de la vérification d'inactivité : ${(err as Error).message}`,
         (err as Error).message,
         {},
+        { eventType: 'error', errorCode: 'INACTIVITY_CHECK_ERROR' },
       ).catch(() => { /* ignore logging errors */ });
     });
   }, MONITOR_INTERVAL_MS);
@@ -107,6 +109,7 @@ export async function checkAllInactivityRules(
           `Activité détectée sur ${node.name} — compteur réinitialisé (était ${previousCount} min)`,
           'Activité détectée',
           { nodeId: rule.nodeId, previousInactiveMinutes: previousCount },
+          { nodeId: rule.nodeId, nodeName: node.name, eventType: 'decision' },
         );
       }
     } else {
@@ -125,6 +128,7 @@ export async function checkAllInactivityRules(
             `Arrêt automatique annulé pour ${node.name} — dépendants actifs: ${names}`,
             'Dépendant actif détecté',
             { nodeId: node.id, ruleId: rule.id, activeDependents: names },
+            { nodeId: node.id, nodeName: node.name, eventType: 'decision' },
           );
           inactivityCounters.set(rule.nodeId, 0);
           continue;
@@ -348,6 +352,7 @@ async function triggerAutoShutdown(
       `Arrêt automatique ignoré pour ${node.name} — cascade déjà en cours`,
       'Cascade déjà active',
       { nodeId: node.id, ruleId: rule.id, existingCascadeId: activeCascade.id },
+      { nodeId: node.id, nodeName: node.name, eventType: 'decision' },
     );
     return false;
   }
@@ -356,6 +361,7 @@ async function triggerAutoShutdown(
     `Arrêt automatique déclenché pour ${node.name} après ${inactiveMinutes} min d'inactivité`,
     `Timeout d'inactivité dépassé (${rule.timeoutMinutes} min)`,
     { nodeId: node.id, ruleId: rule.id, inactiveMinutes },
+    { nodeId: node.id, nodeName: node.name, eventType: 'auto-shutdown' },
   );
 
   // Create cascade record
@@ -379,6 +385,7 @@ async function triggerAutoShutdown(
       `Erreur cascade d'arrêt auto pour ${node.name} : ${(err as Error).message}`,
       (err as Error).message,
       { nodeId: node.id, cascadeId: cascade!.id },
+      { nodeId: node.id, nodeName: node.name, eventType: 'error', cascadeId: cascade!.id, errorCode: 'AUTO_SHUTDOWN_CASCADE_ERROR' },
     ).catch(() => { /* ignore */ });
   });
 
@@ -393,25 +400,6 @@ async function triggerAutoShutdown(
   });
 
   return true;
-}
-
-// --- Logging utility ---
-
-async function logOperation(
-  db: DB,
-  level: 'info' | 'warn' | 'error',
-  source: string,
-  message: string,
-  reason: string | null,
-  details: Record<string, unknown>,
-): Promise<void> {
-  await db.insert(operationLogs).values({
-    level,
-    source,
-    message,
-    reason,
-    details,
-  });
 }
 
 // --- Exported for testing ---

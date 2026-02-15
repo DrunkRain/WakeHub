@@ -141,13 +141,13 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Log the operation
       await fastify.db.insert(operationLogs).values({
-        id: crypto.randomUUID(),
         timestamp: new Date(),
         level: 'info',
         source: 'auth',
         message: `User created: ${username}`,
         reason: 'first-time-setup',
         details: { userId, username },
+        eventType: 'register',
       });
 
       // Log via pino
@@ -288,6 +288,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         message: `User logged in: ${username}`,
         reason: null,
         details: { userId: user.id, username, rememberMe },
+        eventType: 'login',
       });
 
       fastify.log.info({ userId: user.id, username }, 'User logged in');
@@ -318,6 +319,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         message: 'User logged out',
         reason: null,
         details: null,
+        eventType: 'logout',
       });
 
       fastify.log.info('User logged out');
@@ -506,6 +508,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         message: `Password reset for user: ${username}`,
         reason: 'password-reset',
         details: { userId: user.id, username },
+        eventType: 'password-reset',
       });
 
       fastify.log.info({ userId: user.id, username }, 'Password reset completed');

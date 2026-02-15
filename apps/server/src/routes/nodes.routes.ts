@@ -153,6 +153,9 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
           source: 'nodes',
           message: `Node created: ${name} (${type})`,
           details: { nodeId: newNode!.id, type },
+          nodeId: newNode!.id,
+          nodeName: name,
+          eventType: 'decision',
         });
 
         fastify.log.info({ nodeId: newNode!.id, type }, `Node created: ${name}`);
@@ -301,8 +304,37 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
 
         await connector.testConnection(nodeForConnector);
 
+        // Log successful connection test
+        await fastify.db.insert(operationLogs).values({
+          level: 'info',
+          source: 'nodes',
+          message: `Connection test successful for ${node.name}`,
+          details: { nodeId: id, type: node.type },
+          nodeId: id,
+          nodeName: node.name,
+          eventType: 'connection-test',
+        });
+
         return { data: { success: true, message: 'Connection successful' } };
       } catch (error) {
+        const errorMessage = (error as Error).message;
+        const errorCode = error instanceof PlatformError ? error.code : 'CONNECTION_TEST_FAILED';
+
+        // Log failed connection test
+        await fastify.db.insert(operationLogs).values({
+          level: 'error',
+          source: 'nodes',
+          message: `Connection test failed for ${node.name}: ${errorMessage}`,
+          details: { nodeId: id, type: node.type },
+          nodeId: id,
+          nodeName: node.name,
+          eventType: 'connection-test',
+          errorCode,
+          errorDetails: error instanceof PlatformError
+            ? { platform: error.platform, ...error.details }
+            : { error: errorMessage },
+        });
+
         if (error instanceof PlatformError) {
           return reply.status(400).send({
             error: {
@@ -315,7 +347,7 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(400).send({
           error: {
             code: 'CONNECTION_TEST_FAILED',
-            message: (error as Error).message,
+            message: errorMessage,
           },
         });
       }
@@ -533,6 +565,9 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         source: 'nodes',
         message: `Proxmox configured on ${node.name}: ${discovered.length} resources discovered`,
         details: { nodeId: id, discoveredCount: discovered.length },
+        nodeId: id,
+        nodeName: node.name,
+        eventType: 'connection-test',
       });
 
       fastify.log.info({ nodeId: id, discoveredCount: discovered.length }, `Proxmox configured on ${node.name}`);
@@ -686,6 +721,9 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         source: 'nodes',
         message: `Docker configured on ${node.name}: ${discovered.length} containers discovered`,
         details: { nodeId: id, discoveredCount: discovered.length },
+        nodeId: id,
+        nodeName: node.name,
+        eventType: 'connection-test',
       });
 
       fastify.log.info({ nodeId: id, discoveredCount: discovered.length }, `Docker configured on ${node.name}`);
@@ -743,6 +781,9 @@ const nodesRoutes: FastifyPluginAsync = async (fastify) => {
         source: 'nodes',
         message: `Node deleted: ${node.name} (${node.type})`,
         details: { nodeId: id, type: node.type },
+        nodeId: id,
+        nodeName: node.name,
+        eventType: 'decision',
       });
 
       fastify.log.info({ nodeId: id }, `Node deleted: ${node.name}`);

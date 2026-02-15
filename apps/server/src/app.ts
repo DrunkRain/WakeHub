@@ -17,6 +17,7 @@ import cascadesRoutes from './routes/cascades.routes.js';
 import eventsRoutes from './routes/events.routes.js';
 import statsRoutes from './routes/stats.routes.js';
 import inactivityRulesRoutes from './routes/inactivity-rules.routes.js';
+import logsRoutes from './routes/logs.routes.js';
 import { SSEManager } from './sse/sse-manager.js';
 import { authMiddleware, cleanExpiredSessions } from './middleware/auth.middleware.js';
 import { startInactivityMonitor, stopInactivityMonitor } from './services/inactivity-monitor.js';
@@ -61,6 +62,9 @@ await app.register(statsRoutes, { prefix: '/api/stats' });
 
 // Register inactivity rules routes (protected - Story 5.1)
 await app.register(inactivityRulesRoutes, { prefix: '/api/inactivity-rules' });
+
+// Register logs routes (protected - Story 6.1)
+await app.register(logsRoutes, { prefix: '/api/logs' });
 
 // Register auth middleware on all /api routes except auth routes (Story 1.4)
 app.addHook('preHandler', async (request, reply) => {

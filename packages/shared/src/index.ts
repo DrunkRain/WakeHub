@@ -89,6 +89,13 @@ export type {
   MonitoringCriteria,
 } from './models/inactivity-rule.js';
 
+// Operation log models
+export type {
+  OperationLog,
+  OperationLogLevel,
+  OperationLogEventType,
+} from './models/operation-log.js';
+
 // Inactivity rule API types
 export type {
   InactivityRuleResponse,

@@ -1,11 +1,13 @@
 import { eq } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { Node, NodeStatus } from '@wakehub/shared';
-import { nodes, cascades, operationLogs } from '../db/schema.js';
+import { nodes, cascades } from '../db/schema.js';
 import type * as schema from '../db/schema.js';
 import { getUpstreamChain, getDownstreamDependents } from './dependency-graph.js';
 import { getConnector } from '../connectors/connector-factory.js';
 import type { PlatformConnector } from '../connectors/connector.interface.js';
+import { PlatformError } from '../utils/platform-error.js';
+import { logOperation } from '../utils/log-operation.js';
 
 type DB = BetterSQLite3Database<typeof schema>;
 
@@ -103,25 +105,6 @@ export async function pollNodeStatus(
   return false;
 }
 
-// --- Logging utility ---
-
-async function logOperation(
-  db: DB,
-  level: 'info' | 'warn' | 'error',
-  source: string,
-  message: string,
-  reason: string | null,
-  details: Record<string, unknown>,
-): Promise<void> {
-  await db.insert(operationLogs).values({
-    level,
-    source,
-    message,
-    reason,
-    details,
-  });
-}
-
 // --- Cascade Start ---
 
 export async function executeCascadeStart(
@@ -182,6 +165,7 @@ export async function executeCascadeStart(
         `Noeud ${node.name} déjà online — sauté`,
         'Noeud déjà online',
         { cascadeId, nodeId: nid },
+        { nodeId: nid, nodeName: node.name, eventType: 'decision', cascadeId },
       );
       continue;
     }
@@ -254,7 +238,9 @@ export async function executeCascadeStart(
           errorMessage,
         }).where(eq(cascades.id, cascadeId));
 
-        await logOperation(db, 'error', 'cascade-engine', errorMessage, 'Timeout poll status', { cascadeId, nodeId: node.id });
+        await logOperation(db, 'error', 'cascade-engine', errorMessage, 'Timeout poll status', { cascadeId, nodeId: node.id },
+          { nodeId: node.id, nodeName: node.name, eventType: 'error', cascadeId, errorCode: CASCADE_STEP_TIMEOUT },
+        );
 
         onProgress?.({
           type: 'cascade-complete',
@@ -276,16 +262,22 @@ export async function executeCascadeStart(
         `Noeud ${node.name} démarré (étape ${i + 1}/${totalSteps})`,
         null,
         { cascadeId, nodeId: node.id },
+        { nodeId: node.id, nodeName: node.name, eventType: 'start', cascadeId },
       );
     } catch (err) {
       const errorMessage = (err as Error).message;
+      const errCode = err instanceof PlatformError ? err.code : CASCADE_CONNECTOR_ERROR;
+      const errDetails = err instanceof PlatformError
+        ? { platform: err.platform, ...err.details, error: errorMessage }
+        : { error: errorMessage };
+
       await db.update(nodes).set({ status: 'error' }).where(eq(nodes.id, node.id));
       onProgress?.({ type: 'node-status-change', nodeId: node.id, status: 'error' });
 
       await db.update(cascades).set({
         status: 'failed',
         failedStep: i,
-        errorCode: CASCADE_CONNECTOR_ERROR,
+        errorCode: errCode,
         errorMessage,
       }).where(eq(cascades.id, cascadeId));
 
@@ -293,6 +285,7 @@ export async function executeCascadeStart(
         `Erreur connecteur pour ${node.name} : ${errorMessage}`,
         errorMessage,
         { cascadeId, nodeId: node.id },
+        { nodeId: node.id, nodeName: node.name, eventType: 'error', cascadeId, errorCode: errCode, errorDetails: errDetails },
       );
 
       onProgress?.({
@@ -300,7 +293,7 @@ export async function executeCascadeStart(
         cascadeId,
         nodeId: targetNodeId,
         success: false,
-        error: { code: CASCADE_CONNECTOR_ERROR, message: errorMessage },
+        error: { code: errCode, message: errorMessage },
       });
       return;
     }
@@ -323,6 +316,7 @@ export async function executeCascadeStart(
     `Cascade de démarrage terminée avec succès (${totalSteps} étapes)`,
     null,
     { cascadeId, nodeId: targetNodeId },
+    { nodeId: targetNodeId, nodeName: targetNode.name, eventType: 'start', cascadeId },
   );
 }
 
@@ -361,6 +355,7 @@ export async function executeCascadeStop(
         `Noeud ${node.name} déjà offline — sauté`,
         'Noeud déjà offline',
         { cascadeId, nodeId: node.id },
+        { nodeId: node.id, nodeName: node.name, eventType: 'decision', cascadeId },
       );
       return true;
     }
@@ -408,7 +403,9 @@ export async function executeCascadeStop(
           errorMessage,
         }).where(eq(cascades.id, cascadeId));
 
-        await logOperation(db, 'error', 'cascade-engine', errorMessage, 'Timeout poll status', { cascadeId, nodeId: node.id });
+        await logOperation(db, 'error', 'cascade-engine', errorMessage, 'Timeout poll status', { cascadeId, nodeId: node.id },
+          { nodeId: node.id, nodeName: node.name, eventType: 'error', cascadeId, errorCode: CASCADE_STEP_TIMEOUT },
+        );
 
         onProgress?.({
           type: 'cascade-complete',
@@ -431,18 +428,24 @@ export async function executeCascadeStop(
         `Noeud ${node.name} arrêté (étape ${stepIndex}/${totalSteps})`,
         null,
         { cascadeId, nodeId: node.id },
+        { nodeId: node.id, nodeName: node.name, eventType: 'stop', cascadeId },
       );
 
       return true;
     } catch (err) {
       const errorMessage = (err as Error).message;
+      const errCode = err instanceof PlatformError ? err.code : CASCADE_CONNECTOR_ERROR;
+      const errDetails = err instanceof PlatformError
+        ? { platform: err.platform, ...err.details, error: errorMessage }
+        : { error: errorMessage };
+
       await db.update(nodes).set({ status: 'error' }).where(eq(nodes.id, node.id));
       onProgress?.({ type: 'node-status-change', nodeId: node.id, status: 'error' });
 
       await db.update(cascades).set({
         status: 'failed',
         failedStep: stepIndex,
-        errorCode: CASCADE_CONNECTOR_ERROR,
+        errorCode: errCode,
         errorMessage,
       }).where(eq(cascades.id, cascadeId));
 
@@ -450,6 +453,7 @@ export async function executeCascadeStop(
         `Erreur connecteur pour ${node.name} : ${errorMessage}`,
         errorMessage,
         { cascadeId, nodeId: node.id },
+        { nodeId: node.id, nodeName: node.name, eventType: 'error', cascadeId, errorCode: errCode, errorDetails: errDetails },
       );
 
       onProgress?.({
@@ -457,7 +461,7 @@ export async function executeCascadeStop(
         cascadeId,
         nodeId: targetNodeId,
         success: false,
-        error: { code: CASCADE_CONNECTOR_ERROR, message: errorMessage },
+        error: { code: errCode, message: errorMessage },
       });
       return false;
     }
@@ -527,6 +531,7 @@ export async function executeCascadeStop(
     `Cascade d'arrêt terminée avec succès (${stepIndex} étapes)`,
     null,
     { cascadeId, nodeId: targetNodeId },
+    { nodeId: targetNodeId, nodeName: targetNode.name, eventType: 'stop', cascadeId },
   );
 }
 
@@ -577,6 +582,7 @@ async function cleanupUpstream(
         `Dépendance partagée ${depNode.name} protégée — dépendants actifs: ${dependentNames}`,
         `Dépendance partagée — dépendant actif: ${dependentNames}`,
         { cascadeId, nodeId: dep.nodeId },
+        { nodeId: dep.nodeId, nodeName: depNode.name, eventType: 'decision', cascadeId },
       );
       continue;
     }
@@ -587,6 +593,7 @@ async function cleanupUpstream(
         `Extinction proposée pour ${depNode.name} — confirmBeforeShutdown activé`,
         'Extinction proposée — confirmBeforeShutdown activé',
         { cascadeId, nodeId: dep.nodeId },
+        { nodeId: dep.nodeId, nodeName: depNode.name, eventType: 'decision', cascadeId },
       );
       continue;
     }

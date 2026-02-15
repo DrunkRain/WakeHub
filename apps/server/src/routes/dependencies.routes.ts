@@ -124,6 +124,8 @@ const dependenciesRoutes: FastifyPluginAsync = async (fastify) => {
           source: 'dependencies',
           message: `Dependency link created: ${fromNodeId} → ${toNodeId}`,
           details: { dependencyId: dependency!.id, fromNodeId, toNodeId },
+          nodeId: fromNodeId,
+          eventType: 'decision',
         });
 
         return { data: { dependency: dependency! } };
@@ -383,6 +385,8 @@ const dependenciesRoutes: FastifyPluginAsync = async (fastify) => {
           source: 'dependencies',
           message: `Dependency link deleted: ${link.fromNodeId} → ${link.toNodeId}`,
           details: { dependencyId: id, fromNodeId: link.fromNodeId, toNodeId: link.toNodeId },
+          nodeId: link.fromNodeId,
+          eventType: 'decision',
         });
 
         return { data: { success: true } };
