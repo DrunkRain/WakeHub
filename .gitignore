@@ -33,3 +33,8 @@ drizzle/meta
 
 # Build
 *.tsbuildinfo
+
+# BMAD workflow & AI tooling
+_bmad/
+_bmad-output/
+.claude/
