@@ -72,3 +72,4 @@ development_status:
   epic-7: done
   7-1-monitoring-reseau-docker-delta-trafic: done
   7-2-monitoring-reseau-proxmox-rrddata: done
+  epic-7-retrospective: done
